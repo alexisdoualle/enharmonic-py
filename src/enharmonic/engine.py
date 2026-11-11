@@ -22,7 +22,7 @@ from typing import Iterable, Literal, Optional
 
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass
-from .scoring import interval_score
+from .scoring import CONSONANCE_BY_DISTANCE
 
 FoldMode = Literal["clamp", "economy", "off"]
 
@@ -33,20 +33,56 @@ def _is_misspelled_third(a: int, b: int) -> bool:
     return d == 8 or d == 9
 
 
-def _spell_nearest(pc: int, c: float) -> int:
-    """The [-2, +2] spelling of pitch class ``pc`` nearest centre ``c``; ties go to the first letter C..B."""
-    best = 0
-    best_d = math.inf
+def _nearest_candidates(pc: int) -> tuple[tuple[int, int], ...]:
+    """(n, |accidental|) of every [-2, +2] spelling of ``pc``, in letter order C..B."""
+    out = []
     for s in LETTER_ORDER:
         raw = (pc - pitch_class(s - 1)) % 12
         alter = raw - 12 if raw > 6 else raw
         if abs(alter) > 2:
             continue
         n = s - 1 + 7 * alter
+        out.append((n, abs(acc(n))))
+    return tuple(out)
+
+
+#: Per pitch class, the spellings :func:`_spell_nearest` chooses among (hoisted out of the hot loop).
+_NEAREST: tuple[tuple[tuple[int, int], ...], ...] = tuple(_nearest_candidates(pc) for pc in range(12))
+
+
+def _spell_nearest(pc: int, c: float) -> int:
+    """The [-2, +2] spelling of pitch class ``pc`` nearest centre ``c``; ties go to the first letter C..B."""
+    best = 0
+    best_d = math.inf
+    for n, _ in _NEAREST[pc]:
         if abs(n - c) < best_d:
             best_d = abs(n - c)
             best = n
     return best
+
+
+#: Per pitch class, the chromatic-sharp-lean target: the sharpest candidate within one accidental.
+_LEAN_TARGET: tuple[Optional[int], ...] = tuple(
+    max((n for n in candidates(pc) if abs(acc(n)) <= 1), default=None) for pc in range(12))
+
+# Pure functions of an INTEGER centre, memoised (the diatonic frame centre is always an int).
+_FRAME_SCALE: dict[int, tuple[int, ...]] = {}
+_COLLECTION_PCS: dict[int, frozenset[int]] = {}
+
+
+def _frame_scale(c: int) -> tuple[int, ...]:
+    """``letter_at(s, c)`` for the seven slots s = 0..6 (fifths order)."""
+    t = _FRAME_SCALE.get(c)
+    if t is None:
+        t = _FRAME_SCALE[c] = tuple(letter_at(s, c) for s in range(7))
+    return t
+
+
+def _collection_pcs(c: int) -> frozenset[int]:
+    t = _COLLECTION_PCS.get(c)
+    if t is None:
+        t = _COLLECTION_PCS[c] = frozenset(pitch_class(n) for n in _frame_scale(c))
+    return t
 
 
 def collection_at(c: float) -> list[PitchClass]:
@@ -203,6 +239,15 @@ class SpellingEngine:
         self._vertical_pc_triad = o.vertical_pc_triad
         # Math.pow(0.5, 1 / halfLife): bit-identical to V8 for the default 64 (checked in the parity tests).
         self._decay = math.pow(0.5, 1 / self._frame_half_life)
+        self._window_cap = max(self._fold_window, self._frame_window) if self._frame_mode == "diatonic" else self._fold_window
+        # The frame's decay weights by onset age, built by the same repeated multiplication as TS (`w *= decay`)
+        # so every weight is bit-identical; index k = k-th most recent onset in the window.
+        w = 1.0
+        weights = [w]
+        for _ in range(self._window_cap + 1):
+            w *= self._decay
+            weights.append(w)
+        self._weights = weights
         self._init_state()
 
     def _init_state(self) -> None:
@@ -232,6 +277,11 @@ class SpellingEngine:
         self._fold_centre: float = 2
         self._frame_centre = 2
         self._last_decision: Optional[tuple[tuple[int, ...], list[_Row], int]] = None
+        # Pitch-class counts of _pc_window + _cur_onset_pcs (the 'mean' fold's "heard"), kept incrementally.
+        self._heard_counts: list[int] = [0] * 12
+        # Per-onset cache for the diatonic frame (the window only changes at a new onset); see
+        # _compute_frame_centre. None = rebuild.
+        self._frame_cache: Optional[tuple[list[list[float]], dict[int, float]]] = None
 
     # ── note-on ──
 
@@ -254,14 +304,18 @@ class SpellingEngine:
                 self._guard_before = list(self._last_by_letter)
             if self._cur_onset_pcs:
                 self._pc_window.append(self._cur_onset_pcs)
-                cap = max(self._fold_window, self._frame_window) if self._frame_mode == "diatonic" else self._fold_window
-                if len(self._pc_window) > cap:
-                    self._pc_window.pop(0)
+                if len(self._pc_window) > self._window_cap:
+                    heard = self._heard_counts
+                    for pc in self._pc_window.pop(0):
+                        heard[pc] -= 1
                 self._cur_onset_pcs = []
+                self._frame_cache = None
             if t is not None:
                 self._last_t = t
             self._onset += 1
-        self._cur_onset_pcs.append(midi % 12)
+        pc = midi % 12
+        self._cur_onset_pcs.append(pc)
+        self._heard_counts[pc] += 1
         self._cur_onset_midis[midi] = None
         if t is not None and midi not in self._cur_onset_t:
             self._cur_onset_t[midi] = t
@@ -282,10 +336,8 @@ class SpellingEngine:
             if self._frame_keep_alive and self._frame_centre != prev_centre:
                 self._kept.clear()
                 self._pending.clear()
-            fc = self._frame_centre
             scale = self._scale
-            for s in range(7):
-                scale[s] = letter_at(s, fc)
+            scale[:] = _frame_scale(self._frame_centre)
             if self._frame_keep_alive:
                 for s, n in list(self._kept.items()):
                     if scale[s] != n:
@@ -302,22 +354,24 @@ class SpellingEngine:
         best, rows = self._decide(midi, resolve_dir, resolve_exact, None, True)
         if best is None:
             return
-        self._last_decision = (tuple(self._scale[s] for s in LETTER_ORDER), rows, best)
+        # Slot order (fifths); decision() reorders C..B only when asked.
+        self._last_decision = (tuple(self._scale), rows, best)
         self._active[midi] = best
         self._held[midi] = self._held.get(midi, 0) + 1
         self._last_commit = best
-        self._last_by_letter[letter(best)] = (self._onset, best)
+        lb = (best + 1) % 7  # letter(best)
+        self._last_by_letter[lb] = (self._onset, best)
         if self._frame_mode == "diatonic":
             self._committed_lof.append(best)
             if len(self._committed_lof) > self._anchor_window:
                 self._committed_lof.pop(0)
             if self._frame_keep_alive:
-                if best == letter_at(letter(best), self._frame_centre):
-                    self._kept.pop(letter(best), None)
+                if best == _frame_scale(self._frame_centre)[lb]:
+                    self._kept.pop(lb, None)
                 elif self._ornament_ms > 0 and t is not None:
                     self._pending[midi] = _Pending(best, self._last_t)
                 else:
-                    self._kept[letter(best)] = best
+                    self._kept[lb] = best
             if self._onset_revise:
                 self._revise_onset(midi)
             return
@@ -337,6 +391,8 @@ class SpellingEngine:
 
     def _decide(self, midi: int, resolve_dir: int, resolve_exact: int, self_midi: Optional[int],
                 trace: bool) -> tuple[Optional[int], list[_Row]]:
+        # Hot path: letter(n) = (n + 1) % 7, acc(n) = (n + 1) // 7 and pitch_class(n) = (7 * n) % 12 are
+        # inlined, and interval_score is inlined over CONSONANCE_BY_DISTANCE (integer sums, order-free).
         scale = self._scale
         la_on = self._look_ahead_on and resolve_dir != 0
         la_step: Optional[int] = None
@@ -344,74 +400,88 @@ class SpellingEngine:
         la_weight = self._look_ahead_weight
         if la_on:
             target_pc = (midi + resolve_dir) % 12
-            la_target = next((s for s in LETTER_ORDER if pitch_class(scale[s]) == target_pc), None)
+            for s in LETTER_ORDER:
+                if (7 * scale[s]) % 12 == target_pc:
+                    la_target = s
+                    break
             if la_target is not None:
                 la_step = (la_target - 2 * resolve_dir) % 7
-            if la_target is not None and resolve_dir == 1 and acc(scale[la_target]) == 0:
-                la_weight += self._leading_tone_boost
+                if resolve_dir == 1 and (scale[la_target] + 1) // 7 == 0:
+                    la_weight += self._leading_tone_boost
 
         vw = self._vertical_weight
-        if vw > 0:
-            co_sounding = [v for m, v in self._active.items() if m != self_midi]
-        else:
-            co_sounding = []
-        if self._vertical_pc_triad:
-            pcs = {m % 12 for m in self._active if m != self_midi}
-            pcs.add(midi % 12)
-            in_perfect_triad = any((b - a + 12) % 12 == 7 for a in pcs for b in pcs)
-        else:
-            in_perfect_triad = False
-            ln = len(co_sounding)
-            for i in range(ln):
-                p = co_sounding[i]
-                for j in range(i + 1, ln):
-                    if abs(p - co_sounding[j]) == 1:
+        co_sounding: list[int] = []
+        in_perfect_triad = False
+        if vw > 0:  # (the triad test only matters when the vertical term is on)
+            active = self._active
+            co_sounding = [v for m, v in active.items() if m != self_midi]
+            if self._vertical_pc_triad:
+                pcs = {m % 12 for m in active if m != self_midi}
+                pcs.add(midi % 12)
+                # some pair a fifth apart by pitch class  <=>  (b - a) % 12 == 7 for some a, b
+                for a in pcs:
+                    if (a + 7) % 12 in pcs:
                         in_perfect_triad = True
                         break
-                if in_perfect_triad:
-                    break
+            elif len(co_sounding) > 1:
+                # some pair a fifth apart on the line of fifths  <=>  v + 1 present for some v
+                vals = set(co_sounding)
+                for v in vals:
+                    if v + 1 in vals:
+                        in_perfect_triad = True
+                        break
 
         lean_target: Optional[int] = None
         if self._chromatic_sharp_lean > 0:
             centre = self._frame_centre if self._frame_mode == "diatonic" else self._collection_centre
-            collection_pcs = {pitch_class(letter_at(s, centre)) for s in LETTER_ORDER}
-            if (midi % 12) not in collection_pcs:
-                m = -math.inf
-                for n in candidates(midi):
-                    if abs(acc(n)) <= 1:
-                        m = max(m, n)
-                if m != -math.inf:
-                    lean_target = int(m)
+            if (midi % 12) not in _collection_pcs(centre):
+                lean_target = _LEAN_TARGET[midi % 12]
 
         rows: list[_Row] = []
         best: Optional[int] = None
         best_score = -math.inf
         guard_mem = self._guard_memo if self._guard_memo is not None else self._last_by_letter
         rg = self._recency_guard
+        gw = self._guard_window
+        onset = self._onset
+        raise_on = self._guard_raise_line and resolve_exact == 1
+        dap = self._double_acc_penalty
         side_w = self._side_weight
+        anchor = self._anchor
+        side_r = self._side_radius
+        lean = self._chromatic_sharp_lean
+        vert_on = vw > 0 and in_perfect_triad
+        cons = CONSONANCE_BY_DISTANCE
         for n in candidates(midi):
-            ln_ = letter(n)
-            base = interval_score(n, scale)
+            ln_ = (n + 1) % 7
+            base = 0
+            for x in scale:
+                d = n - x if n >= x else x - n
+                base += cons[d] if d < 13 else -2
+            x = scale[ln_]
+            d = n - x if n >= x else x - n
+            base -= cons[d] if d < 13 else -2
             last = guard_mem[ln_]
-            raise_line = (self._guard_raise_line and resolve_exact == 1 and last is not None
-                          and n - last[1] == 7)
-            guarded = (rg and last is not None and last[1] != n
-                       and self._onset - last[0] <= self._guard_window and not raise_line)
-            guard_delta = -rg if guarded else 0
+            if (rg and last is not None and last[1] != n and onset - last[0] <= gw
+                    and not (raise_on and n - last[1] == 7)):
+                guard_delta = -rg
+            else:
+                guard_delta = 0
             if la_on:
                 la_delta = la_weight if ln_ == la_step else (-la_weight if ln_ == la_target else 0)
             else:
                 la_delta = 0
-            da_delta = -self._double_acc_penalty if abs(acc(n)) >= 2 else 0
+            a = (n + 1) // 7
+            da_delta = -dap if (a >= 2 or a <= -2) else 0
             mis_thirds = 0
-            if vw > 0 and in_perfect_triad:
+            if vert_on:
                 for x in co_sounding:
-                    if _is_misspelled_third(n, x):
+                    d = n - x
+                    if d == 8 or d == 9 or d == -8 or d == -9:
                         mis_thirds += 1
             vert_delta = -vw * mis_thirds
-            side_delta = (-side_w * max(0, abs(n - self._anchor) - self._side_radius)) if side_w > 0 else 0
-            lean_delta = (self._chromatic_sharp_lean
-                          if (lean_target is not None and abs(acc(n)) <= 1 and n == lean_target) else 0)
+            side_delta = (-side_w * max(0, abs(n - anchor) - side_r)) if side_w > 0 else 0
+            lean_delta = lean if (lean_target is not None and -1 <= a <= 1 and n == lean_target) else 0
             s = base + guard_delta + la_delta + da_delta + vert_delta + side_delta + lean_delta
             if trace:
                 rows.append((n, base, guard_delta, la_delta, da_delta, vert_delta, side_delta, lean_delta))
@@ -429,7 +499,7 @@ class SpellingEngine:
             for p in self._pending.values():
                 ln_ = letter(p.n)
                 k = self._kept.get(ln_)
-                self._scale[ln_] = k if k is not None else letter_at(ln_, self._frame_centre)
+                self._scale[ln_] = k if k is not None else _frame_scale(self._frame_centre)[ln_]
         try:
             self._revise_onset_notes(just)
         finally:
@@ -458,7 +528,7 @@ class SpellingEngine:
                 pend = self._pending.get(m)
                 if pend is not None:
                     pend.n = best
-                elif best != letter_at(letter(best), self._frame_centre):
+                elif best != _frame_scale(self._frame_centre)[letter(best)]:
                     self._kept[letter(best)] = best
 
     # ── 'mean' frame machinery ──
@@ -476,13 +546,6 @@ class SpellingEngine:
                 if pitch_class(n) != pc:
                     self._scale[s] = n
                     break
-
-    def _heard(self) -> list[int]:
-        out: list[int] = []
-        for w in self._pc_window:
-            out.extend(w)
-        out.extend(self._cur_onset_pcs)
-        return out
 
     def _maybe_fold(self) -> None:
         entries = [(s, self._scale[s]) for s in LETTER_ORDER]
@@ -507,7 +570,7 @@ class SpellingEngine:
         total = 0
         for _, v in entries:
             total += v
-        c_frame = total / len(entries)
+        c_frame = total / len(entries)  # int / int: one correctly rounded division, as in JS
         self._fold_centre = c_frame
 
         favoured = 0
@@ -517,15 +580,15 @@ class SpellingEngine:
             elif c_frame < self._fold_center - self._fold_radius:
                 favoured = +COMMA
             if favoured != 0 and self._fold_economy_gate:
-                heard = self._heard()
-                if heard:
+                heard = self._heard_counts
+                if any(heard):
                     if self._cost_at(heard, c_frame + favoured) > self._cost_at(heard, c_frame):
                         favoured = 0
         else:
-            heard = self._heard()
-            if not heard:
+            heard = self._heard_counts
+            if not any(heard):
                 return
-            vetoed = self._fold_max_chroma > 0 and len(set(heard)) > self._fold_max_chroma
+            vetoed = self._fold_max_chroma > 0 and sum(1 for k in heard if k) > self._fold_max_chroma
             here = self._cost_at(heard, c_frame)
             up = self._cost_at(heard, c_frame + COMMA)
             dn = self._cost_at(heard, c_frame - COMMA)
@@ -552,59 +615,87 @@ class SpellingEngine:
 
     @staticmethod
     def _cost_at(heard: list[int], c: float) -> int:
-        # Cache per pitch class: the sum is of integers, so order does not matter.
-        per_pc = [-1] * 12
+        """Accidentals spent spelling every heard note nearest ``c``. ``heard`` holds COUNTS per pitch class
+        (the sum is of integers, so grouping by pitch class leaves it unchanged)."""
         total = 0
-        for pc in heard:
-            v = per_pc[pc]
-            if v < 0:
-                v = abs(acc(_spell_nearest(pc, c)))
-                per_pc[pc] = v
-            total += v
+        for pc in range(12):
+            k = heard[pc]
+            if not k:
+                continue
+            best_d = math.inf
+            best_a = 0
+            for n, a in _NEAREST[pc]:  # inlined _spell_nearest: strict <, letter order C..B
+                d = abs(n - c)
+                if d < best_d:
+                    best_d = d
+                    best_a = a
+            total += k * best_a
         return total
 
     # ── 'diatonic' frame ──
 
     def _compute_frame_centre(self) -> int:
-        decay = self._decay
+        cur = self._cur_onset_pcs
+        if not cur and not self._pc_window:
+            return self._frame_centre  # TS: total == 0 (window entries are never empty)
+        # counts[pc] in TS is a left fold over float additions: 1.0 once per current-onset occurrence, then
+        # the decayed weight of every window occurrence, newest first. Floats are not associative, so the
+        # fold is reproduced exactly: per onset (the window is fixed within one) cache each pc's weight
+        # sequence, and per (pc, current-onset count) the folded value.
+        cache = self._frame_cache
+        if cache is None:
+            by_pc: list[list[float]] = [[], [], [], [], [], [], [], [], [], [], [], []]
+            W = self._weights
+            win = self._pc_window
+            k = 0
+            for j in range(len(win) - 1, -1, -1):
+                k += 1
+                w = W[k]
+                for pc in win[j]:
+                    by_pc[pc].append(w)
+            cache = self._frame_cache = (by_pc, {})
+        by_pc, memo = cache
+        c0 = [0] * 12
+        for pc in cur:
+            c0[pc] += 1
         counts = [0.0] * 12
-        w = 1.0
-        for pc in self._cur_onset_pcs:
-            counts[pc] += w
-        win = self._pc_window
-        for j in range(len(win) - 1, -1, -1):
-            w *= decay
-            for pc in win[j]:
-                counts[pc] += w
-        total = 0.0
-        for c in counts:
-            total += c
-        if total == 0:
-            return self._frame_centre
+        for pc in range(12):
+            key = c0[pc] * 12 + pc
+            v = memo.get(key)
+            if v is None:
+                v = 0.0
+                for _ in range(c0[pc]):
+                    v += 1.0
+                for w in by_pc[pc]:
+                    v += w
+                memo[key] = v
+            counts[pc] = v
 
-        def coverage(c: int) -> float:
-            s = 0.0
+        # coverage(c) depends on c only mod 12: sum the 7 counts c-3..c+3 on the line of fifths, in that order.
+        cov12 = [0.0] * 12
+        for r in range(12):
+            acc_ = 0.0
             for i in range(-3, 4):
-                s += counts[(7 * (c + i)) % 12]
-            return s
+                acc_ += counts[(7 * (r + i)) % 12]
+            cov12[r] = acc_
 
         prev = self._frame_centre
         anchor = self._median(self._committed_lof) if (self._frame_side == "drift" and self._committed_lof) else prev
         fcen = self._fold_center
         frad = self._fold_radius
 
-        def side_cost(c: int) -> float:
-            return abs(c - anchor) + 1000 * max(0, abs(c - fcen) - frad)
-
         best_c, best_cov, best_side = prev, -1.0, math.inf
         for c in range(prev - 12, prev + 13):
-            cov = coverage(c)
-            sc = side_cost(c)
+            cov = cov12[c % 12]
+            dc = c - fcen
+            sc = abs(c - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
             if cov > best_cov or (cov == best_cov and sc < best_side):
                 best_cov = cov
                 best_c = c
                 best_side = sc
-        if coverage(prev) >= best_cov - self._frame_margin and side_cost(prev) <= best_side:
+        dc = prev - fcen
+        prev_side = abs(prev - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
+        if cov12[prev % 12] >= best_cov - self._frame_margin and prev_side <= best_side:
             return prev
         return best_c
 
@@ -708,7 +799,7 @@ class SpellingEngine:
             return None
         scale, rows, best = self._last_decision
         return Decision(
-            scale=[spelling_of(n) for n in scale],
+            scale=[spelling_of(scale[s]) for s in LETTER_ORDER],
             candidates=[DecisionCandidate(spelling_of(r[0]), *r[1:]) for r in rows],
             chosen=spelling_of(best),
         )
