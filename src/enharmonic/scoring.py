@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from .lof import letter
+#: Consonance by line-of-fifths distance 0..12 (every larger distance scores -2). Hot paths index this
+#: table directly instead of calling :func:`consonance`.
+CONSONANCE_BY_DISTANCE: tuple[int, ...] = (0, 1, 0, 1, 1, 0, -1, -1, -1, -1, -1, -1, -1)
 
 
 def consonance(a: int, b: int) -> int:
@@ -26,10 +28,12 @@ def consonance(a: int, b: int) -> int:
 
 def interval_score(n: int, scale: Sequence[int]) -> int:
     """Total interval score of candidate ``n`` against the other letters of ``scale`` (by letter slot)."""
+    # Integer sum, so the order is free: score all seven slots, then take back the candidate's own letter.
+    cons = CONSONANCE_BY_DISTANCE
     total = 0
-    own = letter(n)
-    for s in range(7):
-        if s == own:
-            continue
-        total += consonance(n, scale[s])
-    return total
+    for x in scale:
+        d = n - x if n >= x else x - n
+        total += cons[d] if d < 13 else -2
+    x = scale[(n + 1) % 7]
+    d = n - x if n >= x else x - n
+    return total - (cons[d] if d < 13 else -2)

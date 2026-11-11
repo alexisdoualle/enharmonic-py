@@ -13,7 +13,7 @@ from typing import Iterable, Optional
 from ._js import js_sign
 from .lof import C_MAJOR, LETTER_ORDER, acc, candidates, letter, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass
-from .scoring import interval_score
+from .scoring import CONSONANCE_BY_DISTANCE
 
 
 class CoreSpeller:
@@ -59,14 +59,28 @@ class CoreSpeller:
             self._onset += 1
         best: Optional[int] = None
         best_score = -math.inf
+        scale = self._scale
+        cons = CONSONANCE_BY_DISTANCE
+        dap = self._double_accidental_penalty
+        rg = self._recency_guard
+        gw = self._guard_window
+        onset = self._onset
+        last_by_letter = self._last_by_letter
         for n in candidates(midi):
-            s = interval_score(n, self._scale)
-            if self._double_accidental_penalty and abs(acc(n)) >= 2:
-                s -= self._double_accidental_penalty
-            last = self._last_by_letter[letter(n)]
-            if (self._recency_guard and last is not None and last[1] != n
-                    and self._onset - last[0] <= self._guard_window):
-                s -= self._recency_guard
+            ln_ = (n + 1) % 7  # letter(n)
+            # interval_score(n, scale), inlined (integer sum, order-free)
+            s = 0
+            for x in scale:
+                d = n - x if n >= x else x - n
+                s += cons[d] if d < 13 else -2
+            x = scale[ln_]
+            d = n - x if n >= x else x - n
+            s -= cons[d] if d < 13 else -2
+            if dap and abs((n + 1) // 7) >= 2:
+                s -= dap
+            last = last_by_letter[ln_]
+            if rg and last is not None and last[1] != n and onset - last[0] <= gw:
+                s -= rg
             if s > best_score:
                 best_score = s
                 best = n
