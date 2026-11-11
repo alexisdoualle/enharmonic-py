@@ -1,0 +1,26 @@
+"""enharmonic: real-time enharmonic pitch-spelling for MIDI input (Python port).
+
+    Speller                      real-time; ``Speller(look_ahead=True)`` near-real-time
+    spell_two_pass               offline (whole piece in hand; highest accuracy)
+    spell_events                 batch helper: drive any mode over an on/off event list
+
+A faithful port of the TypeScript ``enharmonic`` library; ``parity/`` checks it note for note.
+"""
+
+from .candidates import enharmonic_candidates_for
+from .core import CoreSpeller
+from .drive import drive, on_notes, spell_events
+from .interval import Interval, interval_between, interval_label
+from .kernel import resolve_exact_step, resolve_step
+from .pitch import Pitch, PitchClass, midi_of, pitch_class_value, pitch_to_string
+from .speller import Speller
+from .two_pass import TwoPassNote, TwoPassOptions, spell_two_pass, spell_two_pass_traced
+
+__version__ = "0.1.2"
+
+__all__ = [
+    "Speller", "CoreSpeller", "spell_two_pass", "spell_two_pass_traced", "TwoPassNote", "TwoPassOptions",
+    "drive", "on_notes", "spell_events", "resolve_step", "resolve_exact_step",
+    "Pitch", "PitchClass", "midi_of", "pitch_class_value", "pitch_to_string",
+    "Interval", "interval_between", "interval_label", "enharmonic_candidates_for",
+]

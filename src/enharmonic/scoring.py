@@ -1,0 +1,35 @@
+"""Principle 1: interval scoring (port of ``src/scoring.ts``).
+
+    d = 1        P5 / P4                 -> +1     d = 3, 4   3rds / 6ths            -> +1
+    d = 0, 2, 5  unison / 2nds / 7ths    ->  0     d = 6..12  augmented / diminished -> -1
+    d >= 13      doubly aug / dim        -> -2
+"""
+
+from __future__ import annotations
+
+from typing import Sequence
+
+from .lof import letter
+
+
+def consonance(a: int, b: int) -> int:
+    """Consonance of the interval between two line-of-fifths positions, read off their distance."""
+    d = abs(a - b)
+    if d == 1 or d == 3 or d == 4:
+        return 1
+    if d == 0 or d == 2 or d == 5:
+        return 0
+    if d <= 12:
+        return -1
+    return -2
+
+
+def interval_score(n: int, scale: Sequence[int]) -> int:
+    """Total interval score of candidate ``n`` against the other letters of ``scale`` (by letter slot)."""
+    total = 0
+    own = letter(n)
+    for s in range(7):
+        if s == own:
+            continue
+        total += consonance(n, scale[s])
+    return total
