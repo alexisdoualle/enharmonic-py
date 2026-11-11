@@ -7,8 +7,11 @@ Given a stream of MIDI note numbers, it decides whether `61` should be spelled `
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
 **Port status:** matches prod `enharmonic` **`main` at `e346122`** note for note: 0 mismatches over
-3.0 M compared notes (61 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
+3.5 M compared notes (61 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
+
+**Speed:** 80,000 to 90,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
+See [Performance](#performance).
 
 ## Install
 
@@ -93,14 +96,15 @@ The visualiser, MIDI/MusicXML import/export, the chord/Tonnetz/spirals helpers (
 
 ## Performance
 
-Pure CPython 3.12 on an Apple M1 Pro, Meredith clean (195,972 notes), median of 3 runs:
+Pure CPython 3.12.13 on an Apple M1 Pro, Meredith corpus (195,972 notes per variant), median of 3 runs,
+spelling time only. The TypeScript column is the prod library on Node (V8), same machine, clean set.
 
-| mode | seconds | notes/s |
-|---|--:|--:|
-| core | 0.47 | 416,000 |
-| real-time | 2.25 | 87,000 |
-| look-ahead | 2.45 | 80,000 |
-| two-pass | 2.83 | 69,000 |
+| mode | clean | notes/s (clean) | noisy | notes/s (noisy) | TypeScript notes/s |
+|---|--:|--:|--:|--:|--:|
+| core | 0.47 s | 416,000 | 0.47 s | 414,000 | ~1,500,000 |
+| real-time | 2.25 s | 87,000 | 1.90 s | 103,000 | ~220,000 |
+| look-ahead | 2.45 s | 80,000 | 2.09 s | 94,000 | ~206,000 |
+| two-pass | 2.83 s | 69,000 | 3.12 s | 63,000 | ~26,000 |
 
 Timings depend on the CPU and the Python build; reproduce on your machine with `python bench/bench.py`
 (`--sets clean,noisy --modes core,rt,la,tp --repeats 3`; it prints the machine and separates driver from
