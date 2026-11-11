@@ -23,7 +23,7 @@ from .kernel import resolve_exact_step, resolve_step
 from .lof import spelling_of
 from .pitch import Pitch
 from .speller import Speller
-from .two_pass import TwoPassNote, spell_two_pass_lof
+from .two_pass import TwoPassNote, _next_step, spell_two_pass_lof
 
 Mode = Literal["core", "rt", "la", "tp"]
 Event = tuple[float, str, int]
@@ -151,22 +151,11 @@ def spell_events(events: Iterable[Any], mode: Mode = "la") -> list[Optional[Pitc
 
 def resolve_dirs_notes(midis: Sequence[int], exact: bool = False, horizon: int = 16) -> list[int]:
     """meredith.ts ``resolveDirs``: nearest semitone step among the next ``horizon`` notes."""
-    n = len(midis)
-    d = [0] * n
-    for a in range(n):
-        ma = midis[a]
-        for b in range(a + 1, min(n, a + 1 + horizon)):
-            mb = midis[b]
-            # resolve_exact_step / resolve_step, inlined
-            if exact:
-                v = 1 if mb == ma + 1 else -1 if mb == ma - 1 else 0
-            else:
-                iv = (mb - ma) % 12
-                v = 1 if iv == 1 else -1 if iv == 11 else 0
-            if v != 0:
-                d[a] = v
-                break
-    return d
+    ms = list(midis)
+    if exact:
+        return _next_step(ms, [m + 1 for m in ms], [m - 1 for m in ms], horizon)
+    pcs = [m % 12 for m in ms]
+    return _next_step(pcs, [(p + 1) % 12 for p in pcs], [(p + 11) % 12 for p in pcs], horizon)
 
 
 def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahead: bool) -> list[Optional[int]]:

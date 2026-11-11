@@ -78,38 +78,33 @@ def _num(v: Optional[float]) -> float:
 # ── Direction helpers ─────────────────────────────────────────────────────────
 
 
-def _resolve_dirs(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
-    n = len(notes)
+def _next_step(keys: list[int], up: list[int], down: list[int], horizon: int) -> list[int]:
+    """For each a, +1 if the first b in (a, a + horizon] with keys[b] == up[a] or down[a] matches ``up``,
+    -1 if it matches ``down``, 0 if there is none: the forward scan of the TS ``resolveDirs``, computed in
+    one backward sweep with the next index of every key (the scan's first hit is the nearer of the two)."""
+    n = len(keys)
     d = [0] * n
-    midis = [x.midi for x in notes]
-    for a in range(n):
-        ma = midis[a]
-        for b in range(a + 1, min(n, a + 1 + horizon)):
-            iv = (midis[b] - ma) % 12  # resolve_step, inlined
-            if iv == 1:
-                d[a] = 1
-                break
-            if iv == 11:
-                d[a] = -1
-                break
+    nxt: dict[int, int] = {}
+    for a in range(n - 1, -1, -1):
+        bu = nxt.get(up[a], n)
+        bd = nxt.get(down[a], n)
+        b = bu if bu < bd else bd
+        if b < n and b - a <= horizon:
+            d[a] = 1 if b == bu else -1
+        nxt[keys[a]] = a
     return d
+
+
+def _resolve_dirs(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
+    """Nearest-semitone-resolution direction (octave-agnostic) within the next ``horizon`` notes."""
+    pcs = [x.midi % 12 for x in notes]
+    return _next_step(pcs, [(p + 1) % 12 for p in pcs], [(p + 11) % 12 for p in pcs], horizon)
 
 
 def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
-    n = len(notes)
-    d = [0] * n
+    """Exact-pitch up/down resolution within the next ``horizon`` notes."""
     midis = [x.midi for x in notes]
-    for a in range(n):
-        ma = midis[a]
-        for b in range(a + 1, min(n, a + 1 + horizon)):
-            mb = midis[b]
-            if mb == ma + 1:
-                d[a] = 1
-                break
-            if mb == ma - 1:
-                d[a] = -1
-                break
-    return d
+    return _next_step(midis, [m + 1 for m in midis], [m - 1 for m in midis], horizon)
 
 
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],

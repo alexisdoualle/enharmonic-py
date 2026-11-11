@@ -608,6 +608,10 @@ class SpellingEngine:
                     break
 
     def _maybe_fold(self) -> None:
+        if self._fold_slot_recency <= 0 and not self._fold_repair_scale:
+            # Common case (all presets): the centre is the mean of the 7 slots (an int sum, then one division).
+            self._fold_from_centre(sum(self._scale) / 7)
+            return
         entries = [(s, self._scale[s]) for s in LETTER_ORDER]
         if self._fold_slot_recency > 0:
             fresh = []
@@ -630,7 +634,9 @@ class SpellingEngine:
         total = 0
         for _, v in entries:
             total += v
-        c_frame = total / len(entries)  # int / int: one correctly rounded division, as in JS
+        self._fold_from_centre(total / len(entries))  # int / int: one correctly rounded division, as in JS
+
+    def _fold_from_centre(self, c_frame: float) -> None:
         self._fold_centre = c_frame
 
         favoured = 0
@@ -649,9 +655,7 @@ class SpellingEngine:
             if not any(heard):
                 return
             vetoed = self._fold_max_chroma > 0 and sum(1 for k in heard if k) > self._fold_max_chroma
-            here = self._cost_at(heard, c_frame)
-            up = self._cost_at(heard, c_frame + COMMA)
-            dn = self._cost_at(heard, c_frame - COMMA)
+            here, up, dn = self._costs3(heard, c_frame)
             if up < here - self._fold_margin and up <= dn:
                 favoured = +COMMA
             elif dn < here - self._fold_margin:
@@ -684,6 +688,29 @@ class SpellingEngine:
         for k, a in zip(heard, costs):
             total += k * a
         return total
+
+    @staticmethod
+    def _costs3(heard: list[int], c: float) -> tuple[int, int, int]:
+        """_cost_at at ``c``, ``c + COMMA`` and ``c - COMMA`` in one pass over the heard counts."""
+        t0 = _NEAREST_COST.get(c)
+        if t0 is None:
+            t0 = _NEAREST_COST[c] = tuple(abs(acc(_spell_nearest(pc, c))) for pc in range(12))
+        cu = c + COMMA
+        t1 = _NEAREST_COST.get(cu)
+        if t1 is None:
+            t1 = _NEAREST_COST[cu] = tuple(abs(acc(_spell_nearest(pc, cu))) for pc in range(12))
+        cd = c - COMMA
+        t2 = _NEAREST_COST.get(cd)
+        if t2 is None:
+            t2 = _NEAREST_COST[cd] = tuple(abs(acc(_spell_nearest(pc, cd))) for pc in range(12))
+        here = up = dn = 0
+        for pc in range(12):
+            k = heard[pc]
+            if k:
+                here += k * t0[pc]
+                up += k * t1[pc]
+                dn += k * t2[pc]
+        return here, up, dn
 
     # ── 'diatonic' frame ──
 
