@@ -91,6 +91,24 @@ The visualiser, MIDI/MusicXML import/export, the chord/Tonnetz/spirals helpers (
 `liveTonnetz`, `spirals`, `slots`, `export`, `import` tests), the scoring/benchmark tooling
 (`test/eval/score.ts`, the three-tier scorer) and `examples/`. The port covers the speller and its public API.
 
+## Performance
+
+Pure CPython 3.12 on an Apple M1 Pro, Meredith clean (195,972 notes), median of 3 runs:
+
+| mode | seconds | notes/s |
+|---|--:|--:|
+| core | 0.47 | 416,000 |
+| real-time | 2.25 | 87,000 |
+| look-ahead | 2.45 | 80,000 |
+| two-pass | 2.83 | 69,000 |
+
+Timings depend on the CPU and the Python build; reproduce on your machine with `python bench/bench.py`
+(`--sets clean,noisy --modes core,rt,la,tp --repeats 3`; it prints the machine and separates driver from
+speller time). The hot paths are optimised without changing a single spelling: integer sums are regrouped
+freely, but every floating-point sum keeps the TypeScript order, and the diatonic frame decides from
+approximate counts only when the decision is certain (`tests/test_frame_fastpath.py` checks it against
+the exact fold at every note).
+
 ## Parity
 
 The port is only useful if it cannot silently drift from the TypeScript library. `parity/` holds the

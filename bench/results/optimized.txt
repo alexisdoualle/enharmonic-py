@@ -1,0 +1,15 @@
+machine: Apple M1 Pro, 8 cores, CPython 3.12.13, Darwin 27.0.0 (macOS-27.0.1-arm64-arm-64bit)
+
+Meredith clean: 216 movements, 195972 notes, parse 0.26 s
+  mode   total s   notes/s   split (median of 3)
+  core      0.47    415857   driver 0.14, speller 0.33  (runs: 0.47 0.47 0.47)
+  rt        2.25     86998   driver 0.14, speller 2.11  (runs: 2.25 2.23 2.26)
+  la        2.45     79969   driver 0.20, speller 2.25  (runs: 2.45 2.45 2.45)
+  tp        2.83     69197   passes 2.23, merge 0.61  (runs: 2.79 2.90 2.83)
+
+Meredith noisy: 216 movements, 195972 notes, parse 0.33 s
+  mode   total s   notes/s   split (median of 3)
+  core      0.47    413743   driver 0.14, speller 0.34  (runs: 0.47 0.47 0.48)
+  rt        1.90    103379   driver 0.13, speller 1.76  (runs: 1.90 1.91 1.88)
+  la        2.09     93688   driver 0.20, speller 1.90  (runs: 2.07 2.09 2.12)
+  tp        3.12     62720   passes 2.45, merge 0.67  (runs: 3.25 3.05 3.12)
