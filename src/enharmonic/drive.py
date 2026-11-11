@@ -151,13 +151,20 @@ def spell_events(events: Iterable[Any], mode: Mode = "la") -> list[Optional[Pitc
 
 def resolve_dirs_notes(midis: Sequence[int], exact: bool = False, horizon: int = 16) -> list[int]:
     """meredith.ts ``resolveDirs``: nearest semitone step among the next ``horizon`` notes."""
-    step = resolve_exact_step if exact else resolve_step
     n = len(midis)
     d = [0] * n
     for a in range(n):
+        ma = midis[a]
         for b in range(a + 1, min(n, a + 1 + horizon)):
-            d[a] = step(midis[a], midis[b])
-            if d[a] != 0:
+            mb = midis[b]
+            # resolve_exact_step / resolve_step, inlined
+            if exact:
+                v = 1 if mb == ma + 1 else -1 if mb == ma - 1 else 0
+            else:
+                iv = (mb - ma) % 12
+                v = 1 if iv == 1 else -1 if iv == 11 else 0
+            if v != 0:
+                d[a] = v
                 break
     return d
 
