@@ -70,6 +70,10 @@ _FRAME_SCALE: dict[int, tuple[int, ...]] = {}
 _COLLECTION_PCS: dict[int, frozenset[int]] = {}
 
 
+#: Per residue r = c mod 12, the pitch classes of line-of-fifths positions c-3 .. c+3, in that order.
+_COVERAGE_PCS: tuple[tuple[int, ...], ...] = tuple(tuple((7 * (r + i)) % 12 for i in range(-3, 4)) for r in range(12))
+
+
 def _frame_scale(c: int) -> tuple[int, ...]:
     """``letter_at(s, c)`` for the seven slots s = 0..6 (fifths order)."""
     t = _FRAME_SCALE.get(c)
@@ -281,7 +285,14 @@ class SpellingEngine:
         self._heard_counts: list[int] = [0] * 12
         # Per-onset cache for the diatonic frame (the window only changes at a new onset); see
         # _compute_frame_centre. None = rebuild.
-        self._frame_cache: Optional[tuple[list[list[float]], dict[int, float]]] = None
+        self._frame_memo: dict[int, float] = {}
+        self._base_scale: list[int] = []
+        self._base_memo: dict[int, int] = {}
+        self._frame_base: Optional[list[float]] = None  # this onset's counts with no current-onset notes
+        # Per pitch class, the window onsets (by sequence number, oldest first) holding it, one entry per
+        # occurrence; _win_seq is the newest window onset's number. Kept incrementally as the window moves.
+        self._occ: list[list[int]] = [[] for _ in range(12)]
+        self._win_seq = 0
 
     # ── note-on ──
 
@@ -304,12 +315,19 @@ class SpellingEngine:
                 self._guard_before = list(self._last_by_letter)
             if self._cur_onset_pcs:
                 self._pc_window.append(self._cur_onset_pcs)
+                self._win_seq += 1
+                occ = self._occ
+                seq = self._win_seq
+                for pc in self._cur_onset_pcs:
+                    occ[pc].append(seq)
                 if len(self._pc_window) > self._window_cap:
                     heard = self._heard_counts
                     for pc in self._pc_window.pop(0):
                         heard[pc] -= 1
+                        occ[pc].pop(0)
                 self._cur_onset_pcs = []
-                self._frame_cache = None
+                self._frame_memo = {}
+                self._frame_base = None
             if t is not None:
                 self._last_t = t
             self._onset += 1
@@ -452,15 +470,24 @@ class SpellingEngine:
         lean = self._chromatic_sharp_lean
         vert_on = vw > 0 and in_perfect_triad
         cons = CONSONANCE_BY_DISTANCE
+        # interval_score depends only on (n, scale); the onset revision re-decides the same notes against
+        # the same scale, so memoise it until the scale changes.
+        base_memo = self._base_memo
+        if scale != self._base_scale:
+            self._base_scale = list(scale)
+            base_memo.clear()
         for n in candidates(midi):
             ln_ = (n + 1) % 7
-            base = 0
-            for x in scale:
+            base = base_memo.get(n)
+            if base is None:
+                base = 0
+                for x in scale:
+                    d = n - x if n >= x else x - n
+                    base += cons[d] if d < 13 else -2
+                x = scale[ln_]
                 d = n - x if n >= x else x - n
-                base += cons[d] if d < 13 else -2
-            x = scale[ln_]
-            d = n - x if n >= x else x - n
-            base -= cons[d] if d < 13 else -2
+                base -= cons[d] if d < 13 else -2
+                base_memo[n] = base
             last = guard_mem[ln_]
             if (rg and last is not None and last[1] != n and onset - last[0] <= gw
                     and not (raise_on and n - last[1] == 7)):
@@ -640,59 +667,63 @@ class SpellingEngine:
             return self._frame_centre  # TS: total == 0 (window entries are never empty)
         # counts[pc] in TS is a left fold over float additions: 1.0 once per current-onset occurrence, then
         # the decayed weight of every window occurrence, newest first. Floats are not associative, so the
-        # fold is reproduced exactly: per onset (the window is fixed within one) cache each pc's weight
-        # sequence, and per (pc, current-onset count) the folded value.
-        cache = self._frame_cache
-        if cache is None:
-            by_pc: list[list[float]] = [[], [], [], [], [], [], [], [], [], [], [], []]
-            W = self._weights
-            win = self._pc_window
-            k = 0
-            for j in range(len(win) - 1, -1, -1):
-                k += 1
-                w = W[k]
-                for pc in win[j]:
-                    by_pc[pc].append(w)
-            cache = self._frame_cache = (by_pc, {})
-        by_pc, memo = cache
-        c0 = [0] * 12
+        # fold is reproduced exactly, per pitch class, over that class's occurrence list; the window is fixed
+        # within an onset, so each (pc, current-onset count) fold is memoised until the next onset.
+        memo = self._frame_memo
+        occ = self._occ
+        W = self._weights
+        top = self._win_seq + 1  # age of window onset `seq` = top - seq (newest = 1)
+
+        def fold(pc: int, k: int) -> float:
+            v = 0.0
+            for _ in range(k):
+                v += 1.0
+            for seq in reversed(occ[pc]):
+                v += W[top - seq]
+            return v
+
+        base = self._frame_base
+        if base is None:
+            base = self._frame_base = [fold(pc, 0) for pc in range(12)]
+        counts = list(base)
+        c0: dict[int, int] = {}
         for pc in cur:
-            c0[pc] += 1
-        counts = [0.0] * 12
-        for pc in range(12):
-            key = c0[pc] * 12 + pc
+            c0[pc] = c0.get(pc, 0) + 1
+        for pc, k in c0.items():
+            key = k * 12 + pc
             v = memo.get(key)
             if v is None:
-                v = 0.0
-                for _ in range(c0[pc]):
-                    v += 1.0
-                for w in by_pc[pc]:
-                    v += w
-                memo[key] = v
+                v = memo[key] = fold(pc, k)
             counts[pc] = v
 
-        # coverage(c) depends on c only mod 12: sum the 7 counts c-3..c+3 on the line of fifths, in that order.
-        cov12 = [0.0] * 12
-        for r in range(12):
-            acc_ = 0.0
-            for i in range(-3, 4):
-                acc_ += counts[(7 * (r + i)) % 12]
-            cov12[r] = acc_
+        # coverage(c) depends on c only mod 12: the 7 counts at c-3 .. c+3 summed left to right, as TS does
+        # (TS starts from 0.0, and 0.0 + x == x exactly for these non-negative counts).
+        cov12 = [counts[a] + counts[b] + counts[c] + counts[d] + counts[e] + counts[f] + counts[g]
+                 for a, b, c, d, e, f, g in _COVERAGE_PCS]
 
         prev = self._frame_centre
         anchor = self._median(self._committed_lof) if (self._frame_side == "drift" and self._committed_lof) else prev
         fcen = self._fold_center
         frad = self._fold_radius
 
-        best_c, best_cov, best_side = prev, -1.0, math.inf
-        for c in range(prev - 12, prev + 13):
-            cov = cov12[c % 12]
-            dc = c - fcen
-            sc = abs(c - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
-            if cov > best_cov or (cov == best_cov and sc < best_side):
-                best_cov = cov
-                best_c = c
-                best_side = sc
+        # TS scans c = prev-12 .. prev+12 keeping (higher coverage, then lower side cost, then earlier c).
+        # Every residue occurs in that range, so the winner has the maximum coverage; only those c need a
+        # side cost. Same result, same comparisons on the same floats.
+        best_cov = max(cov12)
+        best_c, best_side = prev, math.inf
+        lo = prev - 12
+        hi = prev + 12
+        for r in range(12):
+            if cov12[r] != best_cov:
+                continue
+            c = lo + (r - lo) % 12
+            while c <= hi:
+                dc = c - fcen
+                sc = abs(c - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
+                if sc < best_side or (sc == best_side and c < best_c):  # earliest c wins a tie, as in the scan
+                    best_c = c
+                    best_side = sc
+                c += 12
         dc = prev - fcen
         prev_side = abs(prev - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
         if cov12[prev % 12] >= best_cov - self._frame_margin and prev_side <= best_side:
