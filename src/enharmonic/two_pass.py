@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Literal, NamedTuple, Optional, Sequence
 
 from .engine import TP_PASS_PRESET, Decision, SpellingEngine, with_onset_tolerance
-from .kernel import resolve_step
 from .lof import spelling_of
 from .pitch import PitchClass
 
@@ -82,11 +81,16 @@ def _num(v: Optional[float]) -> float:
 def _resolve_dirs(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
     n = len(notes)
     d = [0] * n
+    midis = [x.midi for x in notes]
     for a in range(n):
-        ma = notes[a].midi
+        ma = midis[a]
         for b in range(a + 1, min(n, a + 1 + horizon)):
-            d[a] = resolve_step(ma, notes[b].midi)
-            if d[a] != 0:
+            iv = (midis[b] - ma) % 12  # resolve_step, inlined
+            if iv == 1:
+                d[a] = 1
+                break
+            if iv == 11:
+                d[a] = -1
                 break
     return d
 
@@ -94,10 +98,11 @@ def _resolve_dirs(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
 def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
     n = len(notes)
     d = [0] * n
+    midis = [x.midi for x in notes]
     for a in range(n):
-        ma = notes[a].midi
+        ma = midis[a]
         for b in range(a + 1, min(n, a + 1 + horizon)):
-            mb = notes[b].midi
+            mb = midis[b]
             if mb == ma + 1:
                 d[a] = 1
                 break
@@ -200,16 +205,19 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     centre: float = _num(agreed_lofs[len(agreed_lofs) >> 1]) if agreed_lofs else 0
 
     # Sounding pitch classes during each note (for the dim7 skip).
+    # (Only membership and all-of tests read these sets, so the order notes are added in does not matter.)
+    pcs_n = [x.midi % 12 for x in N]
+    ton = [x.t_on for x in N]
+    toff = [x.t_off for x in N]
     sounding: list[set[int]] = []
-    for k, x in enumerate(N):
-        s = {x.midi % 12}
-        for m in range(k - 1, max(0, k - 64) - 1, -1):
-            if N[m].t_off > x.t_on:
-                s.add(N[m].midi % 12)
+    for k in range(n):
+        tk_on, tk_off = ton[k], toff[k]
+        s = {pcs_n[m] for m in range(max(0, k - 64), k) if toff[m] > tk_on}
+        s.add(pcs_n[k])
         m = k + 1
         lim = min(n, k + 64)
-        while m < lim and N[m].t_on < x.t_off:
-            s.add(N[m].midi % 12)
+        while m < lim and ton[m] < tk_off:
+            s.add(pcs_n[m])
             m += 1
         sounding.append(s)
 

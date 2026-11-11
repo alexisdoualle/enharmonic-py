@@ -61,6 +61,10 @@ def _spell_nearest(pc: int, c: float) -> int:
     return best
 
 
+#: |accidental| of the nearest spelling of each pitch class, per centre c (a float, memoised by value: the
+#: fold's centres are sums of seven ints over 7, plus or minus a comma, so few distinct values occur).
+_NEAREST_COST: dict[float, tuple[int, ...]] = {}
+
 #: Per pitch class, the chromatic-sharp-lean target: the sharpest candidate within one accidental.
 _LEAN_TARGET: tuple[Optional[int], ...] = tuple(
     max((n for n in candidates(pc) if abs(acc(n)) <= 1), default=None) for pc in range(12))
@@ -561,17 +565,21 @@ class SpellingEngine:
     # ── 'mean' frame machinery ──
 
     def _repair_collision(self, just: int) -> None:
-        pc = pitch_class(just)
-        sounding = {letter(n) for n in self._active.values()}
+        pc = (7 * just) % 12  # pitch_class(just)
+        own = (just + 1) % 7  # letter(just)
+        scale = self._scale
+        sounding = None
         for s in range(7):
-            if s == letter(just) or s in sounding:
+            if s == own or (7 * scale[s]) % 12 != pc:
                 continue
-            if pitch_class(self._scale[s]) != pc:
+            if sounding is None:  # built lazily: a collision is rare
+                sounding = {(n + 1) % 7 for n in self._active.values()}
+            if s in sounding:
                 continue
             for alt in (0, -1, 1, -2, 2):
                 n = s - 1 + 7 * alt
-                if pitch_class(n) != pc:
-                    self._scale[s] = n
+                if (7 * n) % 12 != pc:
+                    scale[s] = n
                     break
 
     def _maybe_fold(self) -> None:
@@ -644,19 +652,12 @@ class SpellingEngine:
     def _cost_at(heard: list[int], c: float) -> int:
         """Accidentals spent spelling every heard note nearest ``c``. ``heard`` holds COUNTS per pitch class
         (the sum is of integers, so grouping by pitch class leaves it unchanged)."""
+        costs = _NEAREST_COST.get(c)
+        if costs is None:
+            costs = _NEAREST_COST[c] = tuple(abs(acc(_spell_nearest(pc, c))) for pc in range(12))
         total = 0
-        for pc in range(12):
-            k = heard[pc]
-            if not k:
-                continue
-            best_d = math.inf
-            best_a = 0
-            for n, a in _NEAREST[pc]:  # inlined _spell_nearest: strict <, letter order C..B
-                d = abs(n - c)
-                if d < best_d:
-                    best_d = d
-                    best_a = a
-            total += k * best_a
+        for k, a in zip(heard, costs):
+            total += k * a
         return total
 
     # ── 'diatonic' frame ──
