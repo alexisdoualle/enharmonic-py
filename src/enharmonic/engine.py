@@ -74,6 +74,13 @@ _FRAME_SCALE: dict[int, tuple[int, ...]] = {}
 _COLLECTION_PCS: dict[int, frozenset[int]] = {}
 
 
+#: Certified fast path of the diatonic frame (see _compute_frame_centre): the approximate counts may differ
+#: from the exact fold by ~1e-11 at most (32 onsets of drift on values below ~1e3); a decision is taken from
+#: them only when every comparison it rests on clears this tolerance, otherwise the exact fold decides.
+_FRAME_TOL = 1e-6
+#: Window moves between re-syncs of the approximate counts to the exact fold.
+_FRAME_RESYNC = 32
+
 #: Per residue r = c mod 12, the pitch classes of line-of-fifths positions c-3 .. c+3, in that order.
 _COVERAGE_PCS: tuple[tuple[int, ...], ...] = tuple(tuple((7 * (r + i)) % 12 for i in range(-3, 4)) for r in range(12))
 
@@ -293,6 +300,10 @@ class SpellingEngine:
         self._base_scale: list[int] = []
         self._base_memo: dict[int, int] = {}
         self._frame_base: Optional[list[float]] = None  # this onset's counts with no current-onset notes
+        # Approximate _frame_base, updated incrementally (x decay per window move); re-synced to the exact
+        # fold every _FRAME_RESYNC moves and whenever the exact fold runs anyway.
+        self._approx: list[float] = [0.0] * 12
+        self._approx_age = 0
         # Per pitch class, the window onsets (by sequence number, oldest first) holding it, one entry per
         # occurrence; _win_seq is the newest window onset's number. Kept incrementally as the window moves.
         self._occ: list[list[int]] = [[] for _ in range(12)]
@@ -324,11 +335,25 @@ class SpellingEngine:
                 seq = self._win_seq
                 for pc in self._cur_onset_pcs:
                     occ[pc].append(seq)
-                if len(self._pc_window) > self._window_cap:
+                evicted = self._pc_window.pop(0) if len(self._pc_window) > self._window_cap else None
+                if evicted is not None:
                     heard = self._heard_counts
-                    for pc in self._pc_window.pop(0):
+                    for pc in evicted:
                         heard[pc] -= 1
                         occ[pc].pop(0)
+                if self._frame_mode == "diatonic":
+                    A = self._approx
+                    d = self._decay
+                    for i in range(12):
+                        A[i] *= d
+                    w1 = self._weights[1]
+                    for pc in self._cur_onset_pcs:
+                        A[pc] += w1
+                    if evicted is not None:
+                        w_old = self._weights[self._window_cap + 1]
+                        for pc in evicted:
+                            A[pc] = A[pc] - w_old if occ[pc] else 0.0  # an absent class is exactly 0
+                    self._approx_age += 1
                 self._cur_onset_pcs = []
                 self._frame_memo = {}
                 self._frame_base = None
@@ -666,6 +691,50 @@ class SpellingEngine:
         cur = self._cur_onset_pcs
         if not cur and not self._pc_window:
             return self._frame_centre  # TS: total == 0 (window entries are never empty)
+        if self._approx_age >= _FRAME_RESYNC:
+            return self._frame_centre_exact()
+        # Fast path: the same decision from approximate counts, taken only when it is certain, i.e. one
+        # residue has the strictly highest coverage by more than _FRAME_TOL and the keep-prev margin test
+        # is not within _FRAME_TOL of its threshold. Otherwise (about 2.5% of notes on Meredith) the exact
+        # fold decides. The result is identical either way.
+        counts = list(self._approx)
+        for pc in cur:
+            counts[pc] += 1.0
+        cov12 = [counts[a] + counts[b] + counts[c] + counts[d] + counts[e] + counts[f] + counts[g]
+                 for a, b, c, d, e, f, g in _COVERAGE_PCS]
+        best_cov = max(cov12)
+        rm = cov12.index(best_cov)
+        lim = best_cov - _FRAME_TOL
+        for r in range(12):
+            if r != rm and cov12[r] > lim:
+                return self._frame_centre_exact()
+        prev = self._frame_centre
+        thr = best_cov - self._frame_margin
+        prev_cov = cov12[prev % 12]
+        if -_FRAME_TOL <= prev_cov - thr <= _FRAME_TOL:
+            return self._frame_centre_exact()
+        anchor = self._median(self._committed_lof) if (self._frame_side == "drift" and self._committed_lof) else prev
+        fcen = self._fold_center
+        frad = self._fold_radius
+        best_c, best_side = prev, math.inf
+        lo = prev - 12
+        c = lo + (rm - lo) % 12
+        while c <= prev + 12:
+            dc = c - fcen
+            sc = abs(c - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
+            if sc < best_side:  # increasing c: strict < keeps the earliest on a tie, as the scan does
+                best_c = c
+                best_side = sc
+            c += 12
+        dc = prev - fcen
+        prev_side = abs(prev - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
+        if prev_cov > thr and prev_side <= best_side:
+            return prev
+        return best_c
+
+    def _frame_centre_exact(self) -> int:
+        """The TypeScript computation, reproduced bit for bit (and re-syncs the approximate counts)."""
+        cur = self._cur_onset_pcs
         # counts[pc] in TS is a left fold over float additions: 1.0 once per current-onset occurrence, then
         # the decayed weight of every window occurrence, newest first. Floats are not associative, so the
         # fold is reproduced exactly, per pitch class, over that class's occurrence list; the window is fixed
@@ -685,7 +754,14 @@ class SpellingEngine:
 
         base = self._frame_base
         if base is None:
-            base = self._frame_base = [fold(pc, 0) for pc in range(12)]
+            base = self._frame_base = [0.0] * 12
+            for pc in range(12):  # fold(pc, 0), inlined: this runs for every pc at every onset
+                v = 0.0
+                for seq in reversed(occ[pc]):
+                    v += W[top - seq]
+                base[pc] = v
+        self._approx = list(base)
+        self._approx_age = 0
         counts = list(base)
         c0: dict[int, int] = {}
         for pc in cur:
