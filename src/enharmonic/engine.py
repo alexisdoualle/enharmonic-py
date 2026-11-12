@@ -20,6 +20,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Iterable, Literal, Optional
 
+from .key import LocalKey, is_leading_tone
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass
 from .scoring import CONSONANCE_BY_DISTANCE
@@ -150,6 +151,11 @@ class EngineOptions:
     #: (:func:`enharmonic.outward_pairs`) whose meeting pitch is a key degree and whose rising tone is chromatic
     #: is spelled ten fifths from its partner (the rising tone sharp), dispositively.
     aug6_outward: bool = False
+    #: LEADING-TONE GATE (look-ahead only): a leading tone of the local key (its sharp 4; in minor also the raised
+    #: 6th and 7th) is named by the key, and a falling chromatic line from it cancels it (C#->C in D minor is C#,
+    #: not Db). A note that falls a semitone (``resolve_dir`` -1) and is a leading tone of its ``local_key``
+    #: (:func:`enharmonic.local_keys`) gets no look-ahead letter-step vote. Without a key the gate does nothing.
+    leading_tone_gate: bool = False
 
 
 #: REAL-TIME tier (``Speller()``).
@@ -168,7 +174,7 @@ LA_PRESET = EngineOptions(
     look_ahead=True, look_ahead_weight=2, leading_tone_boost=1,
     double_acc_penalty=2, collision_repair=True,
     frame_mode="diatonic", onset_revise=True, guard_raise_line=True,
-    aug6_outward=True,
+    aug6_outward=True, leading_tone_gate=True,
     side_weight=1, side_radius=8, anchor_window=32,
     ornament_ms=80,
     vertical_weight=2, vertical_pc_triad=True,
@@ -180,7 +186,7 @@ TP_PASS_PRESET = EngineOptions(
     fold="economy", fold_window=24, fold_margin=7, fold_max_chroma=0, fold_debounce=8,
     look_ahead=True, look_ahead_weight=2,
     double_acc_penalty=2, vertical_weight=1, collision_repair=True, guard_raise_line=True,
-    aug6_outward=True,
+    aug6_outward=True, leading_tone_gate=True,
 )
 
 
@@ -259,6 +265,7 @@ class SpellingEngine:
         self._ornament_ms = o.ornament_ms
         self._vertical_pc_triad = o.vertical_pc_triad
         self._aug6_outward = o.aug6_outward
+        self._leading_tone_gate = o.leading_tone_gate
         # Math.pow(0.5, 1 / halfLife): bit-identical to V8 for the default 64 (checked in the parity tests).
         self._decay = math.pow(0.5, 1 / self._frame_half_life)
         self._window_cap = max(self._fold_window, self._frame_window) if self._frame_mode == "diatonic" else self._fold_window
@@ -279,6 +286,7 @@ class SpellingEngine:
         self._cur_onset_dirs: dict[int, int] = {}
         self._cur_onset_exact: dict[int, int] = {}
         self._cur_onset_outward: dict[int, tuple[int, int]] = {}  # midi -> (partner midi, role)
+        self._cur_onset_key: dict[int, LocalKey] = {}  # midi -> local key (the leading-tone gate's)
         self._guard_before: list[Optional[tuple[int, int]]] = [None] * 7
         self._guard_memo: Optional[list[Optional[tuple[int, int]]]] = None
         self._kept: dict[int, int] = {}
@@ -320,7 +328,8 @@ class SpellingEngine:
     # ── note-on ──
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
-                outward_partner: Optional[int] = None, outward_role: int = 0) -> None:
+                outward_partner: Optional[int] = None, outward_role: int = 0,
+                local_key: Optional[LocalKey] = None) -> None:
         tol = self._onset_tolerance
         if t is None:
             new_onset = True
@@ -336,6 +345,7 @@ class SpellingEngine:
             self._cur_onset_dirs.clear()
             self._cur_onset_exact.clear()
             self._cur_onset_outward.clear()
+            self._cur_onset_key.clear()
             if self._onset_revise:
                 self._guard_before = list(self._last_by_letter)
             if self._cur_onset_pcs:
@@ -381,6 +391,10 @@ class SpellingEngine:
         # A unison doubling without a pair of its own keeps its twin's (both are the same tone).
         if outward_partner is not None and outward_role != 0:
             self._cur_onset_outward[midi] = (outward_partner, outward_role)
+        if local_key is not None:
+            self._cur_onset_key[midi] = local_key
+        else:
+            self._cur_onset_key.pop(midi, None)
 
         if self._pending and t is not None:
             for m, p in list(self._pending.items()):
@@ -455,6 +469,11 @@ class SpellingEngine:
         # inlined, and interval_score is inlined over CONSONANCE_BY_DISTANCE (integer sums, order-free).
         scale = self._scale
         la_on = self._look_ahead_on and resolve_dir != 0
+        # LEADING-TONE GATE: a falling note that is a leading tone of the local key keeps the key's name.
+        if la_on and resolve_dir == -1 and self._leading_tone_gate:
+            key = self._cur_onset_key.get(midi)
+            if key is not None and is_leading_tone(midi % 12, key):
+                la_on = False
         la_step: Optional[int] = None
         la_target: Optional[int] = None
         la_weight = self._look_ahead_weight

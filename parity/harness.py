@@ -65,6 +65,7 @@ EVENT_MODES: dict[str, Callable[[list], list[Lof]]] = {
     "tp_nocentre": _tp(TwoPassOptions(centre_tiebreak=False)),
     "tp_tol30": _tp(TwoPassOptions(onset_tolerance=30)),
     "tp_aug6off": _tp(TwoPassOptions(aug6_outward=False, aug6_wedge=False)),
+    "tp_ltoff": _tp(TwoPassOptions(leading_tone_gate=False)),
 }
 
 

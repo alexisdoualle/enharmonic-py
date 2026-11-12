@@ -1,8 +1,9 @@
 """Speller: the shipped real-time product API (port of ``src/speller.ts``).
 
     Speller()                 -> real-time
-    Speller(look_ahead=True)  -> near-real-time (the caller feeds resolve_dir / resolve_exact, and the aug6
-                                 outward partner from :func:`enharmonic.outward_pairs`)
+    Speller(look_ahead=True)  -> near-real-time (the caller feeds resolve_dir / resolve_exact, the aug6
+                                 outward partner from :func:`enharmonic.outward_pairs`, and the local key
+                                 from :func:`enharmonic.local_keys`)
 
 For offline use with the whole piece in hand, see :func:`enharmonic.spell_two_pass`.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from .engine import LA_PRESET, RT_PRESET, SpellingEngine, collection_at, with_onset_tolerance
+from .key import LocalKey
 from .pitch import Pitch, PitchClass
 
 
@@ -37,10 +39,13 @@ class Speller:
         self._engine.set_key(key_tonic)
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
-                outward_partner: Optional[int] = None, outward_role: int = 0) -> None:
+                outward_partner: Optional[int] = None, outward_role: int = 0,
+                local_key: Optional[LocalKey] = None) -> None:
         """``outward_partner`` / ``outward_role``: the aug6 context (partner midi, +1 rising / -1 falling) from
-        :func:`enharmonic.outward_pairs`; look-ahead only, omit to switch the aug6 rule off."""
-        self._engine.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role)
+        :func:`enharmonic.outward_pairs`; look-ahead only, omit to switch the aug6 rule off. ``local_key``: the
+        key around the note (:func:`enharmonic.local_keys`) for the leading-tone gate; look-ahead only, omit to
+        switch the gate off."""
+        self._engine.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role, local_key)
 
     def note_off(self, midi: int, t: Optional[float] = None) -> None:
         self._engine.note_off(midi, t)

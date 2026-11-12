@@ -6,8 +6,8 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`ship/aug6-speed` at `9a671c5`** note for note: 0 mismatches over
-3.57 M compared notes (61 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
+**Port status:** matches prod `enharmonic` **`ship/lt-gate` at `ad44323`** note for note: 0 mismatches over
+3.62 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
 
 **Speed:** 80,000 to 90,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
@@ -52,7 +52,7 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `Speller()` | `new Speller()` | real-time |
 | `Speller(look_ahead=True)` | `new Speller({ lookAhead: true })` | near-real-time |
 | `Speller(key_tonic=-5, onset_tolerance=30)` | `{ keyTonic, onsetTolerance }` | |
-| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole })` | |
+| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0, local_key=None)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole, localKey })` | |
 | `s.note_off(midi, t=None)` | `noteOff(midi, { t })` | |
 | `s.get_spelling(midi)` -> `Pitch \| None` | `getSpelling(midi)` | |
 | `s.get_lof(midi)` -> line-of-fifths int | (Python only; C=0, G=1, F=-1) | |
@@ -63,6 +63,7 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
 | `resolve_step`, `resolve_exact_step` | same | |
 | `outward_pairs(notes)` -> `OutwardPairs(partner, role)` | `outwardPairs` (aug6 context for look-ahead) | |
+| `local_keys(notes, table="temperley", radius=6)` -> `list[LocalKey \| None]` | `localKeys` (leading-tone gate context for look-ahead) | |
 | `Pitch`, `PitchClass`, `Interval` (frozen dataclasses), `midi_of`, `pitch_class_value`, `pitch_to_string`, `interval_between`, `interval_label`, `enharmonic_candidates_for` | same | |
 
 `Speller.engine.decision()` returns the last note's per-candidate score breakdown
@@ -82,6 +83,7 @@ the same onset may revise it); `t` groups co-struck notes into one onset.
 | `scoring.ts` | `scoring.py` |
 | `kernel.ts` | `kernel.py` |
 | `aug6.ts` | `aug6.py` |
+| `key.ts` | `key.py` |
 | `core.ts` | `core.py` |
 | `engine.ts` | `engine.py` |
 | `speller.ts` | `speller.py` |
@@ -100,21 +102,23 @@ The visualiser, MIDI/MusicXML import/export, the chord/Tonnetz/spirals helpers (
 
 Pure CPython 3.12.13 on an Apple M1 Pro, Meredith corpus (195,972 notes per variant), median of 3 runs,
 spelling time only. The TypeScript column is the prod library on Node (V8), same machine, clean set.
-Look-ahead and two-pass include finding the augmented-sixth pairs (`outward_pairs`, about 0.4 s here).
+Look-ahead and two-pass include finding the augmented-sixth pairs (`outward_pairs`, about 0.4 s here) and the
+local keys (`local_keys`, about 0.6 s clean, 1.1 s noisy).
 
 | mode | clean | notes/s (clean) | noisy | notes/s (noisy) | TypeScript notes/s |
 |---|--:|--:|--:|--:|--:|
 | core | 0.47 s | 416,000 | 0.47 s | 414,000 | ~1,740,000 |
 | real-time | 2.25 s | 87,000 | 1.90 s | 103,000 | ~232,000 |
-| look-ahead | 3.12 s | 63,000 | 2.67 s | 73,000 | ~192,000 |
-| two-pass | 3.47 s | 57,000 | 3.73 s | 53,000 | ~109,000 |
+| look-ahead | 3.77 s | 52,000 | 3.78 s | 52,000 | ~162,000 |
+| two-pass | 4.26 s | 46,000 | 5.03 s | 39,000 | ~94,000 |
 
 Timings depend on the CPU and the Python build; reproduce on your machine with `python bench/bench.py`
 (`--sets clean,noisy --modes core,rt,la,tp --repeats 3`; it prints the machine and separates driver from
 speller time). The hot paths are optimised without changing a single spelling: integer sums are regrouped
 freely, but every floating-point sum keeps the TypeScript order, and the diatonic frame decides from
 approximate counts only when the decision is certain (`tests/test_frame_fastpath.py` checks it against
-the exact fold at every note).
+the exact fold at every note). `local_keys` likewise ranks keys from float prefix sums and defers any
+near-tie to the exact computation (`tests/test_lt_gate.py` checks it against `local_keys_exact`).
 
 ## Parity
 
@@ -136,8 +140,8 @@ Input sets and modes:
 - **random**: 36 streams, 37,215 notes (chords up to 10 notes, unisons, overlapping same-pitch voices,
   long rests, MIDI 0..127, zero-length and never-released notes, stray note-offs, shuffled tie order,
   float-time spread chords). Modes `core rt la tp` plus option variants `rt_tol30 la_tol30 rt_key3
-  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off`.
-- **fixtures**: the lab's 61 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 323,664
+  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff`.
+- **fixtures**: the lab's 60 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 322,426
   notes, `core rt la tp`; the 7 curated prod fixtures also run the option variants.
 - **meredith-clean / meredith-noisy**: 216 movements each, 195,972 notes, driven exactly like
   `test/eval/meredith.ts` (125 ms per tatum, look-ahead over the next 16 notes).
