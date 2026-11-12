@@ -146,6 +146,10 @@ class EngineOptions:
     guard_raise_line: bool = False
     ornament_ms: float = 0
     vertical_pc_triad: bool = False
+    #: AUGMENTED SIXTH BY OUTWARD CONVERGENCE (look-ahead only): a note with an outward partner
+    #: (:func:`enharmonic.outward_pairs`) whose meeting pitch is a key degree and whose rising tone is chromatic
+    #: is spelled ten fifths from its partner (the rising tone sharp), dispositively.
+    aug6_outward: bool = False
 
 
 #: REAL-TIME tier (``Speller()``).
@@ -164,6 +168,7 @@ LA_PRESET = EngineOptions(
     look_ahead=True, look_ahead_weight=2, leading_tone_boost=1,
     double_acc_penalty=2, collision_repair=True,
     frame_mode="diatonic", onset_revise=True, guard_raise_line=True,
+    aug6_outward=True,
     side_weight=1, side_radius=8, anchor_window=32,
     ornament_ms=80,
     vertical_weight=2, vertical_pc_triad=True,
@@ -175,6 +180,7 @@ TP_PASS_PRESET = EngineOptions(
     fold="economy", fold_window=24, fold_margin=7, fold_max_chroma=0, fold_debounce=8,
     look_ahead=True, look_ahead_weight=2,
     double_acc_penalty=2, vertical_weight=1, collision_repair=True, guard_raise_line=True,
+    aug6_outward=True,
 )
 
 
@@ -252,6 +258,7 @@ class SpellingEngine:
         self._guard_raise_line = o.guard_raise_line
         self._ornament_ms = o.ornament_ms
         self._vertical_pc_triad = o.vertical_pc_triad
+        self._aug6_outward = o.aug6_outward
         # Math.pow(0.5, 1 / halfLife): bit-identical to V8 for the default 64 (checked in the parity tests).
         self._decay = math.pow(0.5, 1 / self._frame_half_life)
         self._window_cap = max(self._fold_window, self._frame_window) if self._frame_mode == "diatonic" else self._fold_window
@@ -271,6 +278,7 @@ class SpellingEngine:
         self._cur_onset_t: dict[int, float] = {}
         self._cur_onset_dirs: dict[int, int] = {}
         self._cur_onset_exact: dict[int, int] = {}
+        self._cur_onset_outward: dict[int, tuple[int, int]] = {}  # midi -> (partner midi, role)
         self._guard_before: list[Optional[tuple[int, int]]] = [None] * 7
         self._guard_memo: Optional[list[Optional[tuple[int, int]]]] = None
         self._kept: dict[int, int] = {}
@@ -311,7 +319,8 @@ class SpellingEngine:
 
     # ── note-on ──
 
-    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0) -> None:
+    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
+                outward_partner: Optional[int] = None, outward_role: int = 0) -> None:
         tol = self._onset_tolerance
         if t is None:
             new_onset = True
@@ -326,6 +335,7 @@ class SpellingEngine:
             self._cur_onset_t.clear()
             self._cur_onset_dirs.clear()
             self._cur_onset_exact.clear()
+            self._cur_onset_outward.clear()
             if self._onset_revise:
                 self._guard_before = list(self._last_by_letter)
             if self._cur_onset_pcs:
@@ -368,6 +378,9 @@ class SpellingEngine:
             self._cur_onset_t[midi] = t
         self._cur_onset_dirs[midi] = resolve_dir
         self._cur_onset_exact[midi] = resolve_exact
+        # A unison doubling without a pair of its own keeps its twin's (both are the same tone).
+        if outward_partner is not None and outward_role != 0:
+            self._cur_onset_outward[midi] = (outward_partner, outward_role)
 
         if self._pending and t is not None:
             for m, p in list(self._pending.items()):
@@ -484,6 +497,9 @@ class SpellingEngine:
             if (midi % 12) not in _collection_pcs(centre):
                 lean_target = _LEAN_TARGET[midi % 12]
 
+        outward = self._outward_spelling(midi) if (self._aug6_outward and self._look_ahead_on) else None
+        outward_is_candidate = False
+
         rows: list[_Row] = []
         best: Optional[int] = None
         best_score = -math.inf
@@ -506,6 +522,8 @@ class SpellingEngine:
             self._base_scale = list(scale)
             base_memo.clear()
         for n in candidates(midi):
+            if n == outward:
+                outward_is_candidate = True
             ln_ = (n + 1) % 7
             base = base_memo.get(n)
             if base is None:
@@ -544,7 +562,40 @@ class SpellingEngine:
             if s > best_score:
                 best_score = s
                 best = n
+        # AUG6 OUTWARD: dispositive, above every score.
+        if outward_is_candidate:
+            best = outward
         return best, rows
+
+    def _outward_spelling(self, midi: int) -> Optional[int]:
+        """The aug6 outward rule's spelling for ``midi``, or None: the pair's partner must be committed and
+        sounding, the meeting pitch a key degree and the rising tone chromatic."""
+        pair = self._cur_onset_outward.get(midi)
+        if pair is None:
+            return None
+        partner, role = pair
+        partner_n = self._active.get(partner)
+        if partner_n is None:
+            return None
+        centre = self._frame_centre if self._frame_mode == "diatonic" else self._surface_collection_centre()
+        coll = _collection_pcs(centre)
+        meet_pc = (midi + role) % 12
+        rising_pc = (midi if role == 1 else partner) % 12
+        if meet_pc not in coll or rising_pc in coll:
+            return None
+        return partner_n + 10 if role == 1 else partner_n - 10
+
+    def _surface_collection_centre(self) -> int:
+        """Centre of the 7-fifth window covering the most of the drifting surface's slots (ties to the median)."""
+        L = sorted(self._scale)
+        med = L[3]
+        best_k, best_cov = med, -1
+        lo, hi = min(L[0] + 3, L[6] - 3), max(L[0] + 3, L[6] - 3)
+        for k in range(lo, hi + 1):
+            cov = sum(1 for v in L if k - 3 <= v <= k + 3)
+            if cov > best_cov or (cov == best_cov and abs(k - med) < abs(best_k - med)):
+                best_cov, best_k = cov, k
+        return best_k
 
     # ── onset buffer ──
 

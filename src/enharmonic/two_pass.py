@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Literal, NamedTuple, Optional, Sequence
 
+from .aug6 import outward_pairs
 from .engine import TP_PASS_PRESET, Decision, SpellingEngine, with_onset_tolerance
 from .lof import spelling_of
 from .pitch import PitchClass
@@ -33,6 +34,10 @@ class TwoPassOptions:
     centre_margin: float = 0
     honor_resolution: bool = False
     onset_tolerance: float = 0
+    #: feed both passes the aug6 outward pairs (the engine's ``aug6_outward`` rule)
+    aug6_outward: bool = True
+    #: an aug6 pair (ten fifths) whose sharper tone rises and flatter tone falls is not a wolf in the merge
+    aug6_wedge: bool = True
 
 
 @dataclass(frozen=True)
@@ -108,7 +113,8 @@ def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list
 
 
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],
-                onset_tolerance: float = 0, frames: Optional[list[Optional[TwoPassFrame]]] = None) -> list[Optional[int]]:
+                onset_tolerance: float = 0, frames: Optional[list[Optional[TwoPassFrame]]] = None,
+                outward: Optional[tuple[list[Optional[int]], list[int]]] = None) -> list[Optional[int]]:
     s = SpellingEngine(with_onset_tolerance(TP_PASS_PRESET, onset_tolerance) if onset_tolerance else TP_PASS_PRESET)
     # Releases before strikes at equal t; strikes bass-first. Stable, like Array.prototype.sort.
     evs: list[tuple[float, bool, int]] = []
@@ -121,7 +127,8 @@ def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: 
     for t, on, i in evs:
         midi = notes[i].midi
         if on:
-            s.note_on(midi, t, dirs[i] if dirs is not None else 0, exact[i] if exact is not None else 0)
+            s.note_on(midi, t, dirs[i] if dirs is not None else 0, exact[i] if exact is not None else 0,
+                      outward[0][i] if outward is not None else None, outward[1][i] if outward is not None else 0)
             pend.setdefault(midi, []).append(i)
             if frames is not None:
                 frames[i] = TwoPassFrame(s.get_resolved_scale(), s.get_fold_centre(), s.decision())
@@ -159,6 +166,7 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     backward_la = opts.backward_look_ahead
     centre_tiebreak = opts.centre_tiebreak
     centre_margin = opts.centre_margin
+    wedge = opts.aug6_wedge
     n = len(N)
     if n == 0:
         return _CoreResult([], [], [], [], None, None, 0, -1)
@@ -167,12 +175,17 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     exact_f = _resolve_dirs_exact(N)
     f_frames: Optional[list[Optional[TwoPassFrame]]] = [None] * n if trace_frames else None
     b_frames: Optional[list[Optional[TwoPassFrame]]] = [None] * n if trace_frames else None
-    fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames)
+    out_f: Optional[tuple[list[Optional[int]], list[int]]] = None
+    if opts.aug6_outward:
+        op = outward_pairs(N)
+        out_f = ([N[y].midi if y >= 0 else None for y in op.partner], op.role)
+    fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f)
     T = max(x.t_off for x in N)
     b_notes = [TwoPassNote(x.midi, T - x.t_off, T - x.t_on) for x in N][::-1]
     b_dirs = None if backward_la == "off" else dirs_f[::-1]
     b_out = _drive_pass(b_notes, b_dirs if backward_la != "off" else None,
-                        exact_f[::-1] if backward_la != "off" else None, opts.onset_tolerance, b_frames)
+                        exact_f[::-1] if backward_la != "off" else None, opts.onset_tolerance, b_frames,
+                        (out_f[0][::-1], out_f[1][::-1]) if out_f is not None else None)
     bwd: list[Optional[int]] = [None] * n
     for k in range(n):
         bwd[n - 1 - k] = b_out[k]
@@ -259,6 +272,11 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
                     continue
                 a, b = pick(k, t - 1), pick(k, t)
                 if a is not None and b is not None and abs(a - b) >= 6:
+                    # The aug6 WEDGE: ten fifths, the sharper tone rising and the flatter falling a semitone.
+                    if wedge and abs(a - b) == 10:
+                        hi, lo = (t - 1, t) if a > b else (t, t - 1)
+                        if exact_f[hi] == 1 and exact_f[lo] == -1:
+                            continue
                     cost += 1
             return cost
 

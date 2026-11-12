@@ -82,6 +82,7 @@ const EXTRA: Record<string, (ev: Ev[]) => Lof[]> = {
     tp_bwoff_m2: ev => spellTwoPass(fixturesM.onNotes(ev), { backwardLookAhead: 'off', centreMargin: 2 }).map(toLof),
     tp_nocentre: ev => spellTwoPass(fixturesM.onNotes(ev), { centreTiebreak: false }).map(toLof),
     tp_tol30: ev => spellTwoPass(fixturesM.onNotes(ev), { onsetTolerance: 30 }).map(toLof),
+    tp_aug6off: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6Outward: false, aug6Wedge: false }).map(toLof),
 };
 const CURATED: readonly string[] = fixturesM.FIXTURES;
 
@@ -211,11 +212,19 @@ function predictMeredith(mode: 'core' | 'rt' | 'la' | 'tp', notes: Note[]): Lof[
     const s = mode === 'core' ? new CoreSpeller() : new Speller({ lookAhead: mode === 'la' });
     const dirs = mode === 'la' ? resolveDirs(notes) : null;
     const exact = mode === 'la' ? resolveDirs(notes, true) : null;
+    // Prod commits before the aug6 rule have no outwardPairs (and no outward context).
+    const pairs = mode === 'la' && index.outwardPairs
+        ? index.outwardPairs(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS, tOff: (n.onset + n.dur) * TATUM_MS }))) as { partner: number[]; role: number[] }
+        : null;
     const pred: Lof[] = new Array(notes.length).fill(null);
     const pend = new Map<number, number[]>();
     for (const e of events(notes)) {
         if (e.on) {
-            s.noteOn(e.midi, { t: e.t, resolveDir: dirs ? dirs[e.i]! : 0, resolveExact: exact ? exact[e.i]! : 0 });
+            const y = pairs ? pairs.partner[e.i]! : -1;
+            s.noteOn(e.midi, {
+                t: e.t, resolveDir: dirs ? dirs[e.i]! : 0, resolveExact: exact ? exact[e.i]! : 0,
+                ...(y >= 0 ? { outwardPartner: notes[y]!.midi, outwardRole: pairs!.role[e.i]! } : {}),
+            });
             (pend.get(e.midi) ?? pend.set(e.midi, []).get(e.midi)!).push(e.i);
         } else {
             const q = pend.get(e.midi);

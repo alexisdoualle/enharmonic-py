@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Literal, Optional, Protocol, Sequence
 
+from .aug6 import outward_pairs
 from .core import CoreSpeller
 from .kernel import resolve_exact_step, resolve_step
 from .lof import spelling_of
@@ -32,7 +33,8 @@ Event = tuple[float, str, int]
 class StreamingSpeller(Protocol):
     look_ahead: bool
 
-    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0) -> None: ...
+    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
+                outward_partner: Optional[int] = None, outward_role: int = 0) -> None: ...
     def note_off(self, midi: int, t: Optional[float] = None) -> None: ...
     def get_lof(self, midi: int) -> Optional[int]: ...
 
@@ -67,6 +69,10 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
     pending: dict[int, list[int]] = {}
     la = bool(getattr(s, "look_ahead", False))
     n_ev = len(events)
+    # Look-ahead also gets each note's aug6 outward partner (fixtures.ts drive).
+    notes = on_notes(events) if la else []
+    pairs = outward_pairs(notes) if la else None
+    on_idx = 0
     for i in range(n_ev):
         t, typ, midi = events[i]
         if typ == "on":
@@ -87,7 +93,12 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
                         exact = resolve_exact_step(midi, fmidi)
                     if d != 0 and exact != 0:
                         break
-            s.note_on(midi, t, d, exact)
+            y = pairs.partner[on_idx] if pairs is not None else -1
+            if y >= 0:
+                s.note_on(midi, t, d, exact, notes[y].midi, pairs.role[on_idx])  # type: ignore[union-attr]
+            else:
+                s.note_on(midi, t, d, exact)
+            on_idx += 1
             pending.setdefault(midi, []).append(len(out))
             out.append(None)
         else:
@@ -163,6 +174,7 @@ def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahea
     midis = [x.midi for x in notes]
     dirs = resolve_dirs_notes(midis) if look_ahead else None
     exact = resolve_dirs_notes(midis, True) if look_ahead else None
+    pairs = outward_pairs(notes) if look_ahead else None
     evs: list[tuple[float, bool, int, int]] = []
     for i, x in enumerate(notes):
         evs.append((x.t_on, True, x.midi, i))
@@ -172,7 +184,13 @@ def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahea
     pend: dict[int, list[int]] = {}
     for t, on, midi, i in evs:
         if on:
-            s.note_on(midi, t, dirs[i] if dirs is not None else 0, exact[i] if exact is not None else 0)
+            d = dirs[i] if dirs is not None else 0
+            x = exact[i] if exact is not None else 0
+            y = pairs.partner[i] if pairs is not None else -1
+            if y >= 0:
+                s.note_on(midi, t, d, x, notes[y].midi, pairs.role[i])  # type: ignore[union-attr]
+            else:
+                s.note_on(midi, t, d, x)
             pend.setdefault(midi, []).append(i)
         else:
             q = pend.get(midi)

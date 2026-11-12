@@ -68,7 +68,8 @@ class _NullSpeller:
     def __init__(self, look_ahead: bool) -> None:
         self.look_ahead = look_ahead
 
-    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0) -> None:
+    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
+                outward_partner: Optional[int] = None, outward_role: int = 0) -> None:
         pass
 
     def note_off(self, midi: int, t: Optional[float] = None) -> None:

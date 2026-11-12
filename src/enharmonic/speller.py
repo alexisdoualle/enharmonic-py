@@ -1,7 +1,8 @@
 """Speller: the shipped real-time product API (port of ``src/speller.ts``).
 
     Speller()                 -> real-time
-    Speller(look_ahead=True)  -> near-real-time (the caller feeds resolve_dir / resolve_exact)
+    Speller(look_ahead=True)  -> near-real-time (the caller feeds resolve_dir / resolve_exact, and the aug6
+                                 outward partner from :func:`enharmonic.outward_pairs`)
 
 For offline use with the whole piece in hand, see :func:`enharmonic.spell_two_pass`.
 """
@@ -35,8 +36,11 @@ class Speller:
         """Re-centre the spiral fold basin on a new key mid-stream, without clearing the running frame."""
         self._engine.set_key(key_tonic)
 
-    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0) -> None:
-        self._engine.note_on(midi, t, resolve_dir, resolve_exact)
+    def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
+                outward_partner: Optional[int] = None, outward_role: int = 0) -> None:
+        """``outward_partner`` / ``outward_role``: the aug6 context (partner midi, +1 rising / -1 falling) from
+        :func:`enharmonic.outward_pairs`; look-ahead only, omit to switch the aug6 rule off."""
+        self._engine.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role)
 
     def note_off(self, midi: int, t: Optional[float] = None) -> None:
         self._engine.note_off(midi, t)

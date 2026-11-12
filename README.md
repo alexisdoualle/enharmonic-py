@@ -6,8 +6,8 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`main` at `e346122`** note for note: 0 mismatches over
-3.5 M compared notes (61 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
+**Port status:** matches prod `enharmonic` **`ship/aug6-speed` at `9a671c5`** note for note: 0 mismatches over
+3.57 M compared notes (61 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
 
 **Speed:** 80,000 to 90,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
@@ -52,7 +52,7 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `Speller()` | `new Speller()` | real-time |
 | `Speller(look_ahead=True)` | `new Speller({ lookAhead: true })` | near-real-time |
 | `Speller(key_tonic=-5, onset_tolerance=30)` | `{ keyTonic, onsetTolerance }` | |
-| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0)` | `noteOn(midi, { t, resolveDir, resolveExact })` | |
+| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole })` | |
 | `s.note_off(midi, t=None)` | `noteOff(midi, { t })` | |
 | `s.get_spelling(midi)` -> `Pitch \| None` | `getSpelling(midi)` | |
 | `s.get_lof(midi)` -> line-of-fifths int | (Python only; C=0, G=1, F=-1) | |
@@ -62,6 +62,7 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `CoreSpeller(...)` | `CoreSpeller` (src/core.ts) | real-time |
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
 | `resolve_step`, `resolve_exact_step` | same | |
+| `outward_pairs(notes)` -> `OutwardPairs(partner, role)` | `outwardPairs` (aug6 context for look-ahead) | |
 | `Pitch`, `PitchClass`, `Interval` (frozen dataclasses), `midi_of`, `pitch_class_value`, `pitch_to_string`, `interval_between`, `interval_label`, `enharmonic_candidates_for` | same | |
 
 `Speller.engine.decision()` returns the last note's per-candidate score breakdown
@@ -80,6 +81,7 @@ the same onset may revise it); `t` groups co-struck notes into one onset.
 | `candidates.ts` | `candidates.py` |
 | `scoring.ts` | `scoring.py` |
 | `kernel.ts` | `kernel.py` |
+| `aug6.ts` | `aug6.py` |
 | `core.ts` | `core.py` |
 | `engine.ts` | `engine.py` |
 | `speller.ts` | `speller.py` |
@@ -98,13 +100,14 @@ The visualiser, MIDI/MusicXML import/export, the chord/Tonnetz/spirals helpers (
 
 Pure CPython 3.12.13 on an Apple M1 Pro, Meredith corpus (195,972 notes per variant), median of 3 runs,
 spelling time only. The TypeScript column is the prod library on Node (V8), same machine, clean set.
+Look-ahead and two-pass include finding the augmented-sixth pairs (`outward_pairs`, about 0.4 s here).
 
 | mode | clean | notes/s (clean) | noisy | notes/s (noisy) | TypeScript notes/s |
 |---|--:|--:|--:|--:|--:|
-| core | 0.47 s | 416,000 | 0.47 s | 414,000 | ~1,500,000 |
-| real-time | 2.25 s | 87,000 | 1.90 s | 103,000 | ~220,000 |
-| look-ahead | 2.45 s | 80,000 | 2.09 s | 94,000 | ~206,000 |
-| two-pass | 2.83 s | 69,000 | 3.12 s | 63,000 | ~26,000 |
+| core | 0.47 s | 416,000 | 0.47 s | 414,000 | ~1,740,000 |
+| real-time | 2.25 s | 87,000 | 1.90 s | 103,000 | ~232,000 |
+| look-ahead | 3.12 s | 63,000 | 2.67 s | 73,000 | ~192,000 |
+| two-pass | 3.47 s | 57,000 | 3.73 s | 53,000 | ~109,000 |
 
 Timings depend on the CPU and the Python build; reproduce on your machine with `python bench/bench.py`
 (`--sets clean,noisy --modes core,rt,la,tp --repeats 3`; it prints the machine and separates driver from
@@ -133,7 +136,7 @@ Input sets and modes:
 - **random**: 36 streams, 37,215 notes (chords up to 10 notes, unisons, overlapping same-pitch voices,
   long rests, MIDI 0..127, zero-length and never-released notes, stray note-offs, shuffled tie order,
   float-time spread chords). Modes `core rt la tp` plus option variants `rt_tol30 la_tol30 rt_key3
-  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30`.
+  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off`.
 - **fixtures**: the lab's 61 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 323,664
   notes, `core rt la tp`; the 7 curated prod fixtures also run the option variants.
 - **meredith-clean / meredith-noisy**: 216 movements each, 195,972 notes, driven exactly like
