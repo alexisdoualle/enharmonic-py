@@ -6,8 +6,8 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`ship/lt-gate` at `ad44323`** note for note: 0 mismatches over
-3.62 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
+**Port status:** matches prod `enharmonic` **`main` at `5484e1f`** note for note: 0 mismatches over
+3.67 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
 
 **Speed:** 80,000 to 90,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
@@ -58,11 +58,12 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `s.get_lof(midi)` -> line-of-fifths int | (Python only; C=0, G=1, F=-1) | |
 | `s.set_key(tonic)`, `s.reset(scale=None)`, `s.get_resolved_scale()` | same | |
 | `spell_two_pass(notes, TwoPassOptions())` | `spellTwoPass(notes, opts)` | offline |
+| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, leading_tone_gate=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, leadingToneGate, onsetTolerance, ... }` | |
 | `spell_two_pass_traced(notes)` | `spellTwoPassTraced` | (introspection) |
 | `CoreSpeller(...)` | `CoreSpeller` (src/core.ts) | real-time |
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
 | `resolve_step`, `resolve_exact_step` | same | |
-| `outward_pairs(notes)` -> `OutwardPairs(partner, role)` | `outwardPairs` (aug6 context for look-ahead) | |
+| `outward_pairs(notes, look=8, first_move_meet=True)` -> `OutwardPairs(partner, role)` | `outwardPairs(notes, look, { firstMoveMeet })` (aug6 context for look-ahead) | |
 | `local_keys(notes, table="temperley", radius=6)` -> `list[LocalKey \| None]` | `localKeys` (leading-tone gate context for look-ahead) | |
 | `Pitch`, `PitchClass`, `Interval` (frozen dataclasses), `midi_of`, `pitch_class_value`, `pitch_to_string`, `interval_between`, `interval_label`, `enharmonic_candidates_for` | same | |
 
@@ -140,7 +141,8 @@ Input sets and modes:
 - **random**: 36 streams, 37,215 notes (chords up to 10 notes, unisons, overlapping same-pitch voices,
   long rests, MIDI 0..127, zero-length and never-released notes, stray note-offs, shuffled tie order,
   float-time spread chords). Modes `core rt la tp` plus option variants `rt_tol30 la_tol30 rt_key3
-  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff`.
+  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff
+  tp_meetoff`.
 - **fixtures**: the lab's 60 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 322,426
   notes, `core rt la tp`; the 7 curated prod fixtures also run the option variants.
 - **meredith-clean / meredith-noisy**: 216 movements each, 195,972 notes, driven exactly like

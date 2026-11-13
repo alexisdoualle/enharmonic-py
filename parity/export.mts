@@ -84,6 +84,7 @@ const EXTRA: Record<string, (ev: Ev[]) => Lof[]> = {
     tp_tol30: ev => spellTwoPass(fixturesM.onNotes(ev), { onsetTolerance: 30 }).map(toLof),
     tp_aug6off: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6Outward: false, aug6Wedge: false }).map(toLof),
     tp_ltoff: ev => spellTwoPass(fixturesM.onNotes(ev), { leadingToneGate: false }).map(toLof),
+    tp_meetoff: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6FirstMoveMeet: false }).map(toLof),
 };
 const CURATED: readonly string[] = fixturesM.FIXTURES;
 

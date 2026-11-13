@@ -47,6 +47,17 @@ def test_outward_pairs():
     assert all(p < 0 for p in outward_pairs(_notes([[56, 63, 66], [55, 62, 67]])).partner)
 
 
+def test_outward_pairs_first_move_meet():
+    # Ab C Eb F# struck ten times, then G B D G: the meeting onset is beyond the 8-onset window, but the
+    # first moves of F# and Ab (re-strikes skipped) land on that one onset.
+    ger6 = [56, 60, 63, 66]
+    chords = [ger6] * 10 + [[55, 59, 62, 67]]
+    notes = [TwoPassNote(m, k, k + 1) for k, c in enumerate(chords) for m in c]
+    op = outward_pairs(notes)
+    assert (op.partner[3], op.role[3]) == (0, 1)
+    assert all(p < 0 for p in outward_pairs(notes, 8, first_move_meet=False).partner[:4])
+
+
 def test_two_pass_options():
     notes = _notes(C_MINOR + [[56, 60, 63, 66], [55, 59, 62, 67]], 500)
     assert len(spell_two_pass(notes, TwoPassOptions(aug6_outward=False, aug6_wedge=False))) == len(notes)

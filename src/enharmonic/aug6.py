@@ -25,10 +25,11 @@ class OutwardPairs(NamedTuple):
     role: list[int]
 
 
-def _first_exact_moves(notes: Sequence[Any]) -> list[int]:
+def _first_exact_moves(notes: Sequence[Any], at: list[int]) -> list[int]:
     """Each note's FIRST semitone move at the exact pitch, read by onset: skip later onsets that strike the
     note's pitch class again, then take the first onset holding a semitone neighbour in any octave; +1 if it
-    has the exact semitone above (and not below), -1 for below, else 0. Notes sorted by onset."""
+    has the exact semitone above (and not below), -1 for below, else 0. Notes sorted by onset. ``at``
+    receives, per note, the index of the first note of the onset its move lands on (-1: no move)."""
     n = len(notes)
     exact = [0] * n
     midis = [x.midi for x in notes]
@@ -83,19 +84,26 @@ def _first_exact_moves(notes: Sequence[Any]) -> list[int]:
                 g += 1
                 continue
             exact[a] = x
+            at[a] = c_start[g]
             break
     return exact
 
 
-def outward_pairs(notes: Sequence[Any], look: int = 8) -> OutwardPairs:
+def outward_pairs(notes: Sequence[Any], look: int = 8, first_move_meet: bool = True) -> OutwardPairs:
     """Outward-convergence pairs. Note x and a note y sounding at x's onset pair up when x is ten semitones
     above y by pitch class, the major third above y sounds, each tone's first move is outward (x up, y down),
-    and one onset among the next ``look`` after x's strikes both x+1 and y-1 at the exact pitch. ``notes``
-    have ``midi``, ``t_on``, ``t_off`` and are sorted by onset."""
+    and one onset among the next ``look`` after x's strikes both x+1 and y-1 at the exact pitch, or
+    (``first_move_meet``) both first moves land on one onset. ``notes`` have ``midi``, ``t_on``, ``t_off``
+    and are sorted by onset.
+
+    MEETING BY FIRST MOVES (``first_move_meet``, default True): the two tones of an augmented sixth also meet
+    when their first moves (re-strikes skipped) land on one onset, however far away: a German sixth repeated
+    across many onsets (Haydn Sym. 99/ii) resolves past the look window, but both tones still move at once."""
     n = len(notes)
     partner = [-1] * n
     role = [0] * n
-    moves = _first_exact_moves(notes)
+    move_at = [-1] * n
+    moves = _first_exact_moves(notes, move_at)
     midis = [x.midi for x in notes]
     pcs = [m % 12 for m in midis]
     ton = [x.t_on for x in notes]
@@ -140,6 +148,9 @@ def outward_pairs(notes: Sequence[Any], look: int = 8) -> OutwardPairs:
                     met = True
                     break
                 seen += 1
+            # "The two tones meet when their first moves, re-strikes skipped, land on one onset."
+            if not met and first_move_meet and move_at[x] >= 0 and move_at[x] == move_at[y]:
+                met = True
             if not met:
                 continue
             if partner[x] < 0:

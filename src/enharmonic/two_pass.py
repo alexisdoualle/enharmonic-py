@@ -37,6 +37,9 @@ class TwoPassOptions:
     onset_tolerance: float = 0
     #: feed both passes the aug6 outward pairs (the engine's ``aug6_outward`` rule)
     aug6_outward: bool = True
+    #: the aug6 pairs also meet when the two tones' first moves land on one onset (``outward_pairs``'s
+    #: ``first_move_meet``: a held or repeated German sixth resolving past the 8-onset window)
+    aug6_first_move_meet: bool = True
     #: an aug6 pair (ten fifths) whose sharper tone rises and flatter tone falls is not a wolf in the merge
     aug6_wedge: bool = True
     #: feed both passes each note's local key (the engine's ``leading_tone_gate``): the ``"tonic-triad"`` table
@@ -183,7 +186,7 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     b_frames: Optional[list[Optional[TwoPassFrame]]] = [None] * n if trace_frames else None
     out_f: Optional[tuple[list[Optional[int]], list[int]]] = None
     if opts.aug6_outward:
-        op = outward_pairs(N)
+        op = outward_pairs(N, first_move_meet=opts.aug6_first_move_meet)
         out_f = ([N[y].midi if y >= 0 else None for y in op.partner], op.role)
     # The local keys are read in forward time on onsets centred on each note; the backward pass reads them too.
     keys_f = local_keys(N, "tonic-triad", 12) if opts.leading_tone_gate else None
