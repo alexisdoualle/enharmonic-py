@@ -2,8 +2,9 @@
 
     Speller()                 -> real-time
     Speller(look_ahead=True)  -> near-real-time (the caller feeds resolve_dir / resolve_exact, the aug6
-                                 outward partner from :func:`enharmonic.outward_pairs`, and the local key
-                                 from :func:`enharmonic.local_keys`)
+                                 outward partner from :func:`enharmonic.outward_pairs`, the local key
+                                 from :func:`enharmonic.local_keys`, and the key-degree gate's key from
+                                 :func:`enharmonic.degree_keys`)
 
 For offline use with the whole piece in hand, see :func:`enharmonic.spell_two_pass`.
 """
@@ -40,12 +41,15 @@ class Speller:
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
                 outward_partner: Optional[int] = None, outward_role: int = 0,
-                local_key: Optional[LocalKey] = None) -> None:
+                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None) -> None:
         """``outward_partner`` / ``outward_role``: the aug6 context (partner midi, +1 rising / -1 falling) from
         :func:`enharmonic.outward_pairs`; look-ahead only, omit to switch the aug6 rule off. ``local_key``: the
         key around the note (:func:`enharmonic.local_keys`) for the leading-tone gate; look-ahead only, omit to
-        switch the gate off."""
-        self._engine.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role, local_key)
+        switch the gate off. ``degree_key``: the key-degree gate's key (:func:`enharmonic.degree_keys`: the
+        tonic-triad table on +-12 notes centred on the note); a semitone resolution into a pitch outside it keeps
+        the note's letter instead of the look-ahead's letter step. Look-ahead only, omit to switch the gate
+        off."""
+        self._engine.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role, local_key, degree_key)
 
     def note_off(self, midi: int, t: Optional[float] = None) -> None:
         self._engine.note_off(midi, t)

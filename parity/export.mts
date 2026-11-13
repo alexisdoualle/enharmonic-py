@@ -85,6 +85,7 @@ const EXTRA: Record<string, (ev: Ev[]) => Lof[]> = {
     tp_aug6off: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6Outward: false, aug6Wedge: false }).map(toLof),
     tp_ltoff: ev => spellTwoPass(fixturesM.onNotes(ev), { leadingToneGate: false }).map(toLof),
     tp_meetoff: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6FirstMoveMeet: false }).map(toLof),
+    tp_kdgoff: ev => spellTwoPass(fixturesM.onNotes(ev), { keyDegreeGate: false }).map(toLof),
 };
 const CURATED: readonly string[] = fixturesM.FIXTURES;
 
@@ -222,6 +223,10 @@ function predictMeredith(mode: 'core' | 'rt' | 'la' | 'tp', notes: Note[]): Lof[
     const keys = mode === 'la' && index.localKeys
         ? index.localKeys(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS }))) as unknown[]
         : null;
+    // Prod commits before the key-degree gate have no degreeKeys.
+    const degKeys = mode === 'la' && index.degreeKeys
+        ? index.degreeKeys(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS }))) as unknown[]
+        : null;
     const pred: Lof[] = new Array(notes.length).fill(null);
     const pend = new Map<number, number[]>();
     for (const e of events(notes)) {
@@ -231,6 +236,7 @@ function predictMeredith(mode: 'core' | 'rt' | 'la' | 'tp', notes: Note[]): Lof[
                 t: e.t, resolveDir: dirs ? dirs[e.i]! : 0, resolveExact: exact ? exact[e.i]! : 0,
                 ...(y >= 0 ? { outwardPartner: notes[y]!.midi, outwardRole: pairs!.role[e.i]! } : {}),
                 ...(keys ? { localKey: keys[e.i] } : {}),
+                ...(degKeys ? { degreeKey: degKeys[e.i] } : {}),
             });
             (pend.get(e.midi) ?? pend.set(e.midi, []).get(e.midi)!).push(e.i);
         } else {

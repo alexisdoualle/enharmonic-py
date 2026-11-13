@@ -6,8 +6,8 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`main` at `5484e1f`** note for note: 0 mismatches over
-3.67 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
+**Port status:** matches prod `enharmonic` **`main` at `9ea7c67`** note for note: 0 mismatches over
+3.72 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
 
 **Speed:** 80,000 to 90,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
@@ -52,19 +52,20 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `Speller()` | `new Speller()` | real-time |
 | `Speller(look_ahead=True)` | `new Speller({ lookAhead: true })` | near-real-time |
 | `Speller(key_tonic=-5, onset_tolerance=30)` | `{ keyTonic, onsetTolerance }` | |
-| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0, local_key=None)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole, localKey })` | |
+| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0, local_key=None, degree_key=None)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole, localKey, degreeKey })` | |
 | `s.note_off(midi, t=None)` | `noteOff(midi, { t })` | |
 | `s.get_spelling(midi)` -> `Pitch \| None` | `getSpelling(midi)` | |
 | `s.get_lof(midi)` -> line-of-fifths int | (Python only; C=0, G=1, F=-1) | |
 | `s.set_key(tonic)`, `s.reset(scale=None)`, `s.get_resolved_scale()` | same | |
 | `spell_two_pass(notes, TwoPassOptions())` | `spellTwoPass(notes, opts)` | offline |
-| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, leading_tone_gate=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, leadingToneGate, onsetTolerance, ... }` | |
+| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, leading_tone_gate=True, key_degree_gate=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, leadingToneGate, keyDegreeGate, onsetTolerance, ... }` | |
 | `spell_two_pass_traced(notes)` | `spellTwoPassTraced` | (introspection) |
 | `CoreSpeller(...)` | `CoreSpeller` (src/core.ts) | real-time |
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
 | `resolve_step`, `resolve_exact_step` | same | |
 | `outward_pairs(notes, look=8, first_move_meet=True)` -> `OutwardPairs(partner, role)` | `outwardPairs(notes, look, { firstMoveMeet })` (aug6 context for look-ahead) | |
-| `local_keys(notes, table="temperley", radius=6)` -> `list[LocalKey \| None]` | `localKeys` (leading-tone gate context for look-ahead) | |
+| `local_keys(notes, table="temperley", radius=6, unit="onsets")` -> `list[LocalKey \| None]` | `localKeys(notes, { table, radius, unit })` (leading-tone gate context for look-ahead) | |
+| `degree_keys(notes)` -> `list[LocalKey \| None]` | `degreeKeys` (key-degree gate context: tonic-triad table on +-12 notes) | |
 | `Pitch`, `PitchClass`, `Interval` (frozen dataclasses), `midi_of`, `pitch_class_value`, `pitch_to_string`, `interval_between`, `interval_label`, `enharmonic_candidates_for` | same | |
 
 `Speller.engine.decision()` returns the last note's per-candidate score breakdown
@@ -104,7 +105,7 @@ The visualiser, MIDI/MusicXML import/export, the chord/Tonnetz/spirals helpers (
 Pure CPython 3.12.13 on an Apple M1 Pro, Meredith corpus (195,972 notes per variant), median of 3 runs,
 spelling time only. The TypeScript column is the prod library on Node (V8), same machine, clean set.
 Look-ahead and two-pass include finding the augmented-sixth pairs (`outward_pairs`, about 0.4 s here) and the
-local keys (`local_keys`, about 0.6 s clean, 1.1 s noisy).
+local keys (`local_keys`, about 0.6 s clean, 1.1 s noisy) and the key-degree keys (`degree_keys`).
 
 | mode | clean | notes/s (clean) | noisy | notes/s (noisy) | TypeScript notes/s |
 |---|--:|--:|--:|--:|--:|
@@ -142,7 +143,7 @@ Input sets and modes:
   long rests, MIDI 0..127, zero-length and never-released notes, stray note-offs, shuffled tie order,
   float-time spread chords). Modes `core rt la tp` plus option variants `rt_tol30 la_tol30 rt_key3
   la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff
-  tp_meetoff`.
+  tp_meetoff tp_kdgoff`.
 - **fixtures**: the lab's 60 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 322,426
   notes, `core rt la tp`; the 7 curated prod fixtures also run the option variants.
 - **meredith-clean / meredith-noisy**: 216 movements each, 195,972 notes, driven exactly like

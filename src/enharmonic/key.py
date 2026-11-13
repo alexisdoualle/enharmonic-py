@@ -1,4 +1,5 @@
-"""The local key around a note: the context the engine's leading-tone gate reads (port of ``src/key.ts``).
+"""The local key around a note: the context the engine's leading-tone and key-degree gates read (port of
+``src/key.ts``).
 
 Proposition: a leading tone of the local key (its sharp 4, leading to the dominant; in minor also the raised 6th
 and 7th) is named by the key, and a falling chromatic line from it cancels it (C#->C in D minor stays C#, not the
@@ -16,6 +17,9 @@ Two tables:
 - ``"tonic-triad"``: from theory, no fitted numbers. "A key is its tonic triad inside its seven-note collection":
   tonic-triad tones 3, the collection's other tones 2, the rest 0; major uses the diatonic collection, minor the
   harmonic minor. The two-pass tier reads it on +-12 onsets.
+
+The key-degree gate (:func:`is_key_degree`, engine option ``key_degree_gate``) reads its own key, the tonic-triad
+table on +-12 NOTES centred on the note (:func:`degree_keys`), on both look-ahead and two-pass.
 """
 
 from __future__ import annotations
@@ -37,6 +41,9 @@ class KeyNote(Protocol):
 
 
 KeyTable = Literal["temperley", "tonic-triad"]
+#: What ``radius`` counts: ``"onsets"`` (co-struck notes are one onset) or ``"notes"``, the notes of the input
+#: order on each side of the note itself (the input must then be in onset order, co-struck notes in any fixed order).
+KeyUnit = Literal["onsets", "notes"]
 
 _TEMPERLEY = (
     (0.748, 0.060, 0.488, 0.082, 0.670, 0.460, 0.096, 0.715, 0.104, 0.366, 0.057, 0.400),
@@ -117,23 +124,41 @@ _ROWS = {
 _MARGIN = 1e-7
 
 
-def local_keys(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: int = 6) -> list[Optional[LocalKey]]:
-    """Each note's local key (same order as the input): the best key of the pitch classes struck in the onsets from
-    ``radius`` before the note's onset to ``radius`` after it, one count per note. Onsets are exact ``t_on``
-    values. Notes need not be sorted. Defaults: the look-ahead tier's table and window."""
+def _units(notes: Sequence[KeyNote], unit: KeyUnit) -> tuple[list[list[int]], list[int]]:
+    """The window units in order (onsets in time order, or the notes in input order), their pitch-class counts,
+    and each note's unit."""
     n = len(notes)
+    if unit == "notes":
+        counts = []
+        for x in notes:
+            c = [0] * 12
+            c[x.midi % 12] = 1
+            counts.append(c)
+        return counts, list(range(n))
     idx = sorted(range(n), key=lambda i: notes[i].t_on)
-    counts: list[list[int]] = []
-    onset_of = [0] * n
+    counts = []
+    unit_of = [0] * n
     last_t: Optional[float] = None
     for i in idx:
         if last_t is None or notes[i].t_on != last_t:
             counts.append([0] * 12)
             last_t = notes[i].t_on
         counts[-1][notes[i].midi % 12] += 1
-        onset_of[i] = len(counts) - 1
+        unit_of[i] = len(counts) - 1
+    return counts, unit_of
+
+
+def local_keys(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: int = 6,
+               unit: KeyUnit = "onsets") -> list[Optional[LocalKey]]:
+    """Each note's local key (same order as the input): the best key of the pitch classes struck in the onsets from
+    ``radius`` before the note's onset to ``radius`` after it, one count per note. Onsets are exact ``t_on``
+    values. Notes need not be sorted, unless ``unit`` is ``"notes"`` (then ``radius`` counts notes of the input
+    order on each side of the note). Defaults: the look-ahead tier's table and window."""
+    if unit == "notes":
+        return _note_keys(notes, table, radius)
+    counts, unit_of = _units(notes, unit)
     rows = _ROWS[table]
-    # Prefix sums over onsets: pitch-class counts (exact integers) and key scores (the fast path's).
+    # Prefix sums over the units: pitch-class counts (exact integers) and key scores (the fast path's).
     pre = [[0] * 12]
     pre_s = [[0.0] * 24]
     for c in counts:
@@ -161,23 +186,55 @@ def local_keys(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: 
             if (best - max(sc)) / math.sqrt(dx) > _MARGIN:
                 key = LocalKey(k >> 1, bool(k & 1))
         keys[o] = key if key is not None else _best_key(tuple(h), table)
-    return [keys[onset_of[i]] for i in range(n)]
+    return [keys[u] for u in unit_of]
 
 
-def local_keys_exact(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: int = 6) -> list[Optional[LocalKey]]:
+def _note_keys(notes: Sequence[KeyNote], table: KeyTable, radius: int) -> list[Optional[LocalKey]]:
+    """:func:`local_keys` with ``unit="notes"``: the window slides one note at a time, so its pitch-class counts
+    (exact integers) and key scores (the fast path's) are updated by one note in and one out, never rebuilt.
+    Same certificate as the onset path: a near tie goes to the exact computation."""
+    n = len(notes)
+    pcs = [x.midi % 12 for x in notes]
+    rows = _ROWS[table]
+    h = [0] * 12
+    sc = [0.0] * 24
+    tot = sq = 0
+    hi = 0  # notes [lo, hi) are in the window
+    lo = 0
+    out: list[Optional[LocalKey]] = [None] * n
+    for i in range(n):
+        a, b = max(0, i - radius), min(n, i + radius + 1)
+        while hi < b:
+            q = pcs[hi]
+            sq += 2 * h[q] + 1
+            h[q] += 1
+            tot += 1
+            sc = [x + y for x, y in zip(sc, rows[q])]
+            hi += 1
+        while lo < a:
+            q = pcs[lo]
+            h[q] -= 1
+            sq -= 2 * h[q] + 1
+            tot -= 1
+            sc = [x - y for x, y in zip(sc, rows[q])]
+            lo += 1
+        dx = sq - tot * tot / 12
+        key: Optional[LocalKey] = None
+        if dx > 0:
+            best = max(sc)
+            k = sc.index(best)
+            second = max(sc[:k] + sc[k + 1:])
+            if (best - second) / math.sqrt(dx) > _MARGIN:
+                key = LocalKey(k >> 1, bool(k & 1))
+        out[i] = key if key is not None else _best_key(tuple(h), table)
+    return out
+
+
+def local_keys_exact(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: int = 6,
+                     unit: KeyUnit = "onsets") -> list[Optional[LocalKey]]:
     """:func:`local_keys` with every window decided by the exact computation (no fast path); the reference the
     tests hold the fast path to."""
-    n = len(notes)
-    idx = sorted(range(n), key=lambda i: notes[i].t_on)
-    counts: list[list[int]] = []
-    onset_of = [0] * n
-    last_t: Optional[float] = None
-    for i in idx:
-        if last_t is None or notes[i].t_on != last_t:
-            counts.append([0] * 12)
-            last_t = notes[i].t_on
-        counts[-1][notes[i].midi % 12] += 1
-        onset_of[i] = len(counts) - 1
+    counts, unit_of = _units(notes, unit)
     pre = [[0] * 12]
     for c in counts:
         p = pre[-1]
@@ -187,7 +244,14 @@ def local_keys_exact(notes: Sequence[KeyNote], table: KeyTable = "temperley", ra
     for o in range(len(counts)):
         pa, pb = pre[max(0, o - radius)], pre[min(last, o + radius) + 1]
         keys.append(_best_key(tuple(pb[q] - pa[q] for q in range(12)), table))
-    return [keys[onset_of[i]] for i in range(n)]
+    return [keys[u] for u in unit_of]
+
+
+def degree_keys(notes: Sequence[KeyNote]) -> list[Optional[LocalKey]]:
+    """Each note's key for the key-degree gate (same order as the input, which must be in onset order): the
+    tonic-triad table (from theory, no fitted numbers) on the 12 notes on each side of the note. Both the
+    look-ahead and the two-pass tier read it."""
+    return local_keys(notes, "tonic-triad", 12, "notes")
 
 
 def is_leading_tone(pc: int, key: LocalKey) -> bool:
@@ -195,3 +259,10 @@ def is_leading_tone(pc: int, key: LocalKey) -> bool:
     minor the sharp 4, the raised 6th and the raised 7th."""
     d = (pc - key.tonic) % 12
     return d in (6, 9, 11) if key.minor else d == 6
+
+
+def is_key_degree(pc: int, key: LocalKey) -> bool:
+    """Whether pitch class ``pc`` is a degree of ``key``: in major its seven diatonic degrees; in minor the natural
+    minor plus the raised 6th and 7th."""
+    d = (pc - key.tonic) % 12
+    return d not in (1, 4, 6) if key.minor else d in (0, 2, 4, 5, 7, 9, 11)

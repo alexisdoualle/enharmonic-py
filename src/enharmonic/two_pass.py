@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Literal, NamedTuple, Optional, Sequence
 
 from .aug6 import outward_pairs
-from .key import LocalKey, local_keys
+from .key import LocalKey, degree_keys, local_keys
 from .engine import TP_PASS_PRESET, Decision, SpellingEngine, with_onset_tolerance
 from .lof import spelling_of
 from .pitch import PitchClass
@@ -45,6 +45,10 @@ class TwoPassOptions:
     #: feed both passes each note's local key (the engine's ``leading_tone_gate``): the ``"tonic-triad"`` table
     #: (a key is its tonic triad inside its seven-note collection; no fitted numbers) on +-12 onsets
     leading_tone_gate: bool = True
+    #: feed both passes each note's key-degree key (:func:`enharmonic.degree_keys`: the tonic-triad table on +-12
+    #: notes), so the engine's ``key_degree_gate`` keeps a note's letter on a semitone move into a pitch outside
+    #: the key
+    key_degree_gate: bool = True
 
 
 @dataclass(frozen=True)
@@ -122,7 +126,8 @@ def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],
                 onset_tolerance: float = 0, frames: Optional[list[Optional[TwoPassFrame]]] = None,
                 outward: Optional[tuple[list[Optional[int]], list[int]]] = None,
-                keys: Optional[Sequence[Optional[LocalKey]]] = None) -> list[Optional[int]]:
+                keys: Optional[Sequence[Optional[LocalKey]]] = None,
+                deg_keys: Optional[Sequence[Optional[LocalKey]]] = None) -> list[Optional[int]]:
     s = SpellingEngine(with_onset_tolerance(TP_PASS_PRESET, onset_tolerance) if onset_tolerance else TP_PASS_PRESET)
     # Releases before strikes at equal t; strikes bass-first. Stable, like Array.prototype.sort.
     evs: list[tuple[float, bool, int]] = []
@@ -137,7 +142,7 @@ def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: 
         if on:
             s.note_on(midi, t, dirs[i] if dirs is not None else 0, exact[i] if exact is not None else 0,
                       outward[0][i] if outward is not None else None, outward[1][i] if outward is not None else 0,
-                      keys[i] if keys is not None else None)
+                      keys[i] if keys is not None else None, deg_keys[i] if deg_keys is not None else None)
             pend.setdefault(midi, []).append(i)
             if frames is not None:
                 frames[i] = TwoPassFrame(s.get_resolved_scale(), s.get_fold_centre(), s.decision())
@@ -190,14 +195,16 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
         out_f = ([N[y].midi if y >= 0 else None for y in op.partner], op.role)
     # The local keys are read in forward time on onsets centred on each note; the backward pass reads them too.
     keys_f = local_keys(N, "tonic-triad", 12) if opts.leading_tone_gate else None
-    fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f, keys_f)
+    deg_f = degree_keys(N) if opts.key_degree_gate else None
+    fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f, keys_f, deg_f)
     T = max(x.t_off for x in N)
     b_notes = [TwoPassNote(x.midi, T - x.t_off, T - x.t_on) for x in N][::-1]
     b_dirs = None if backward_la == "off" else dirs_f[::-1]
     b_out = _drive_pass(b_notes, b_dirs if backward_la != "off" else None,
                         exact_f[::-1] if backward_la != "off" else None, opts.onset_tolerance, b_frames,
                         (out_f[0][::-1], out_f[1][::-1]) if out_f is not None else None,
-                        keys_f[::-1] if keys_f is not None else None)
+                        keys_f[::-1] if keys_f is not None else None,
+                        deg_f[::-1] if deg_f is not None else None)
     bwd: list[Optional[int]] = [None] * n
     for k in range(n):
         bwd[n - 1 - k] = b_out[k]
