@@ -20,7 +20,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Iterable, Literal, Optional
 
-from .key import LocalKey, is_key_degree, is_leading_tone
+from .key import LocalKey, is_key_degree, is_leading_tone, is_wide_leading_tone
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass
 from .scoring import CONSONANCE_BY_DISTANCE
@@ -163,6 +163,13 @@ class EngineOptions:
     #: the look-ahead's vote is withheld (both directions). The key comes from the caller (``degree_key``, read by
     #: :func:`enharmonic.degree_keys`: the tonic-triad table on +-12 notes); without one the gate does nothing.
     key_degree_gate: bool = False
+    #: HELD-LETTER TARGET (look-ahead only): a rising note whose target letter is held by the note's own other
+    #: spelling is still the target's leading tone, when the local key names it one. F# rising to G while the G
+    #: slot holds Gb (F#'s own other name) finds no target in the surface, so the look-ahead gave no vote; now the
+    #: target takes the collection's letter (G) and F# the step below it, when ``local_key`` (the leading-tone
+    #: gate's) names F# a leading tone (:func:`enharmonic.key.is_wide_leading_tone`: major natural 7, #4, #1, #5
+    #: and the 2nd; minor #7, #4, #6, #1 and the 2nd).
+    held_letter_target: bool = False
 
 
 #: REAL-TIME tier (``Speller()``).
@@ -181,7 +188,7 @@ LA_PRESET = EngineOptions(
     look_ahead=True, look_ahead_weight=2, leading_tone_boost=1,
     double_acc_penalty=2, collision_repair=True,
     frame_mode="diatonic", onset_revise=True, guard_raise_line=True,
-    aug6_outward=True, leading_tone_gate=True, key_degree_gate=True,
+    aug6_outward=True, leading_tone_gate=True, key_degree_gate=True, held_letter_target=True,
     side_weight=1, side_radius=8, anchor_window=32,
     ornament_ms=80,
     vertical_weight=2, vertical_pc_triad=True,
@@ -193,7 +200,7 @@ TP_PASS_PRESET = EngineOptions(
     fold="economy", fold_window=24, fold_margin=7, fold_max_chroma=0, fold_debounce=8,
     look_ahead=True, look_ahead_weight=2,
     double_acc_penalty=2, vertical_weight=1, collision_repair=True, guard_raise_line=True,
-    aug6_outward=True, leading_tone_gate=True, key_degree_gate=True,
+    aug6_outward=True, leading_tone_gate=True, key_degree_gate=True, held_letter_target=True,
 )
 
 
@@ -274,6 +281,7 @@ class SpellingEngine:
         self._aug6_outward = o.aug6_outward
         self._leading_tone_gate = o.leading_tone_gate
         self._key_degree_gate = o.key_degree_gate
+        self._held_letter_target = o.held_letter_target
         # Math.pow(0.5, 1 / halfLife): bit-identical to V8 for the default 64 (checked in the parity tests).
         self._decay = math.pow(0.5, 1 / self._frame_half_life)
         self._window_cap = max(self._fold_window, self._frame_window) if self._frame_mode == "diatonic" else self._fold_window
@@ -503,6 +511,19 @@ class SpellingEngine:
                 if (7 * scale[s]) % 12 == target_pc:
                     la_target = s
                     break
+            # HELD-LETTER TARGET: the target's letter is held by this note's own other spelling (the G slot holds
+            # Gb while F# rises to G); if the key names the note a leading tone, take the collection's letter.
+            if la_target is None and self._held_letter_target and resolve_dir == 1:
+                c = self._frame_centre if self._frame_mode == "diatonic" else self._surface_collection_centre()
+                s0 = None
+                for s in LETTER_ORDER:
+                    if (7 * letter_at(s, c)) % 12 == target_pc:
+                        s0 = s
+                        break
+                own = midi % 12
+                k = self._cur_onset_key.get(midi)
+                if s0 is not None and k is not None and is_wide_leading_tone(own, k) and (7 * scale[s0]) % 12 == own:
+                    la_target = s0
             if la_target is not None:
                 la_step = (la_target - 2 * resolve_dir) % 7
                 if resolve_dir == 1 and (scale[la_target] + 1) // 7 == 0:

@@ -266,3 +266,11 @@ def is_key_degree(pc: int, key: LocalKey) -> bool:
     minor plus the raised 6th and 7th."""
     d = (pc - key.tonic) % 12
     return d not in (1, 4, 6) if key.minor else d in (0, 2, 4, 5, 7, 9, 11)
+
+
+def is_wide_leading_tone(pc: int, key: LocalKey) -> bool:
+    """Whether the local key names pitch class ``pc`` a leading tone in the wide sense, the reading the engine's
+    held-letter target uses. By semitones above the tonic: major 11 (natural 7), 6 (#4), 1 (#1), 8 (#5) and 2 (the
+    2nd, a semitone under b3); minor 11 (#7), 6 (#4), 9 (#6), 1 (#1) and 2 (the 2nd, leading to b3)."""
+    d = (pc - key.tonic) % 12
+    return d in (11, 6, 9, 1, 2) if key.minor else d in (11, 6, 1, 2, 8)

@@ -6,7 +6,7 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`main` at `9ea7c67`** note for note: 0 mismatches over
+**Port status:** matches prod `enharmonic` **`main` at `4c6cfa6`** note for note: 0 mismatches over
 3.72 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
 
