@@ -13,10 +13,11 @@ Two tables:
 
 - ``"temperley"``: Temperley's key profiles, pitch-class distributions of the Kostka-Payne textbook corpus
   (D. Temperley, *Music and Probability*, MIT Press 2007, ch. 4; the same numbers as music21's
-  ``TemperleyKostkaPayne``). A fitted profile; the look-ahead tier reads it on +-6 onsets.
+  ``TemperleyKostkaPayne``). A fitted profile, kept for comparison; no tier reads it by default.
 - ``"tonic-triad"``: from theory, no fitted numbers. "A key is its tonic triad inside its seven-note collection":
   tonic-triad tones 3, the collection's other tones 2, the rest 0; major uses the diatonic collection, minor the
-  harmonic minor. The two-pass tier reads it on +-12 onsets.
+  harmonic minor. Both look-ahead and two-pass read it on +-12 onsets (the default). At +-6 it ties Temperley;
+  the wider window reads the surrounding key instead of a brief tonicization.
 
 The key-degree gate (:func:`is_key_degree`, engine option ``key_degree_gate``) reads its own key, the tonic-triad
 table on +-12 NOTES centred on the note (:func:`degree_keys`), on both look-ahead and two-pass.
@@ -148,7 +149,7 @@ def _units(notes: Sequence[KeyNote], unit: KeyUnit) -> tuple[list[list[int]], li
     return counts, unit_of
 
 
-def local_keys(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: int = 6,
+def local_keys(notes: Sequence[KeyNote], table: KeyTable = "tonic-triad", radius: int = 12,
                unit: KeyUnit = "onsets") -> list[Optional[LocalKey]]:
     """Each note's local key (same order as the input): the best key of the pitch classes struck in the onsets from
     ``radius`` before the note's onset to ``radius`` after it, one count per note. Onsets are exact ``t_on``
@@ -230,7 +231,7 @@ def _note_keys(notes: Sequence[KeyNote], table: KeyTable, radius: int) -> list[O
     return out
 
 
-def local_keys_exact(notes: Sequence[KeyNote], table: KeyTable = "temperley", radius: int = 6,
+def local_keys_exact(notes: Sequence[KeyNote], table: KeyTable = "tonic-triad", radius: int = 12,
                      unit: KeyUnit = "onsets") -> list[Optional[LocalKey]]:
     """:func:`local_keys` with every window decided by the exact computation (no fast path); the reference the
     tests hold the fast path to."""

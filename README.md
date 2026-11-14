@@ -6,11 +6,11 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`main` at `4c6cfa6`** note for note: 0 mismatches over
+**Port status:** matches prod `enharmonic` **`main` at `1cb2979`** note for note: 0 mismatches over
 3.72 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
 See [Parity](#parity).
 
-**Speed:** 80,000 to 90,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
+**Speed:** 80,000 to 100,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
 See [Performance](#performance).
 
 ## Install
@@ -64,7 +64,7 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
 | `resolve_step`, `resolve_exact_step` | same | |
 | `outward_pairs(notes, look=8, first_move_meet=True)` -> `OutwardPairs(partner, role)` | `outwardPairs(notes, look, { firstMoveMeet })` (aug6 context for look-ahead) | |
-| `local_keys(notes, table="temperley", radius=6, unit="onsets")` -> `list[LocalKey \| None]` | `localKeys(notes, { table, radius, unit })` (leading-tone gate context for look-ahead) | |
+| `local_keys(notes, table="tonic-triad", radius=12, unit="onsets")` -> `list[LocalKey \| None]` | `localKeys(notes, { table, radius, unit })` (leading-tone gate context for look-ahead) | |
 | `degree_keys(notes)` -> `list[LocalKey \| None]` | `degreeKeys` (key-degree gate context: tonic-triad table on +-12 notes) | |
 | `Pitch`, `PitchClass`, `Interval` (frozen dataclasses), `midi_of`, `pitch_class_value`, `pitch_to_string`, `interval_between`, `interval_label`, `enharmonic_candidates_for` | same | |
 
@@ -104,15 +104,15 @@ The visualiser, MIDI/MusicXML import/export, the chord/Tonnetz/spirals helpers (
 
 Pure CPython 3.12.13 on an Apple M1 Pro, Meredith corpus (195,972 notes per variant), median of 3 runs,
 spelling time only. The TypeScript column is the prod library on Node (V8), same machine, clean set.
-Look-ahead and two-pass include finding the augmented-sixth pairs (`outward_pairs`, about 0.4 s here) and the
-local keys (`local_keys`, about 0.6 s clean, 1.1 s noisy) and the key-degree keys (`degree_keys`).
+Look-ahead and two-pass include finding the augmented-sixth pairs (`outward_pairs`, about 0.4 s here), the
+local keys (`local_keys`, about 0.7 s clean) and the key-degree keys (`degree_keys`, about 0.9 s clean).
 
 | mode | clean | notes/s (clean) | noisy | notes/s (noisy) | TypeScript notes/s |
 |---|--:|--:|--:|--:|--:|
-| core | 0.47 s | 416,000 | 0.47 s | 414,000 | ~1,740,000 |
-| real-time | 2.25 s | 87,000 | 1.90 s | 103,000 | ~232,000 |
-| look-ahead | 3.77 s | 52,000 | 3.78 s | 52,000 | ~162,000 |
-| two-pass | 4.26 s | 46,000 | 5.03 s | 39,000 | ~94,000 |
+| core | 0.53 s | 371,000 | 0.49 s | 400,000 | ~1,740,000 |
+| real-time | 2.44 s | 80,000 | 2.02 s | 97,000 | ~232,000 |
+| look-ahead | 4.90 s | 40,000 | 4.95 s | 40,000 | ~162,000 |
+| two-pass | 5.24 s | 37,000 | 6.00 s | 33,000 | ~94,000 |
 
 Timings depend on the CPU and the Python build; reproduce on your machine with `python bench/bench.py`
 (`--sets clean,noisy --modes core,rt,la,tp --repeats 3`; it prints the machine and separates driver from
