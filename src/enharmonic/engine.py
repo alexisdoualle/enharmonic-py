@@ -67,6 +67,24 @@ def _spell_nearest(pc: int, c: float) -> int:
 #: fold's centres are sums of seven ints over 7, plus or minus a comma, so few distinct values occur).
 _NEAREST_COST: dict[float, tuple[int, ...]] = {}
 
+#: The same per (centre, signature): with a key signature, a spelling costs the commas between it and its letter's
+#: spelling in the signature (whose collection is the fifths [sig - 1, sig + 5]): under five flats, Db costs 0 and D
+#: costs 1. TS sums ``counts * |n - v| / 7`` in floats; |n - v| is a multiple of 7, so every term is a whole number.
+_SIG_COST: dict[tuple[float, float], tuple[int, ...]] = {}
+
+
+def _sig_costs(c: float, sig: float) -> tuple[int, ...]:
+    t = _SIG_COST.get((c, sig))
+    if t is None:
+        out = []
+        for pc in range(12):
+            n = _spell_nearest(pc, c)
+            v = sig - 1 + (n - (sig - 1)) % 7
+            out.append(int(abs(n - v)) // 7)
+        t = _SIG_COST[(c, sig)] = tuple(out)
+    return t
+
+
 #: Per pitch class, the chromatic-sharp-lean target: the sharpest candidate within one accidental.
 _LEAN_TARGET: tuple[Optional[int], ...] = tuple(
     max((n for n in candidates(pc) if abs(acc(n)) <= 1), default=None) for pc in range(12))
@@ -309,6 +327,9 @@ class SpellingEngine:
         # (NaN: the raw tie).
         self._side_started = False
         self._side_x: Optional[float] = None
+        # The key signature the ECONOMY fold counts accidentals from: its relative-major tonic on the line of fifths
+        # (0 = C, the default count). Set per note by the two-pass tier (set_signature).
+        self._signature: float = 0
 
     def _init_state(self) -> None:
         # Insertion-ordered dicts stand in for JS Map/Set (same iteration order, same "re-set keeps position").
@@ -844,7 +865,7 @@ class SpellingEngine:
             if not any(heard):
                 return
             vetoed = self._fold_max_chroma > 0 and sum(1 for k in heard if k) > self._fold_max_chroma
-            here, up, dn = self._costs3(heard, c_frame)
+            here, up, dn = self._costs3(heard, c_frame, self._signature)
             if up < here - self._fold_margin and up <= dn:
                 favoured = +COMMA
             elif dn < here - self._fold_margin:
@@ -879,19 +900,25 @@ class SpellingEngine:
         return total
 
     @staticmethod
-    def _costs3(heard: list[int], c: float) -> tuple[int, int, int]:
-        """_cost_at at ``c``, ``c + COMMA`` and ``c - COMMA`` in one pass over the heard counts."""
-        t0 = _NEAREST_COST.get(c)
-        if t0 is None:
-            t0 = _NEAREST_COST[c] = tuple(abs(acc(_spell_nearest(pc, c))) for pc in range(12))
-        cu = c + COMMA
-        t1 = _NEAREST_COST.get(cu)
-        if t1 is None:
-            t1 = _NEAREST_COST[cu] = tuple(abs(acc(_spell_nearest(pc, cu))) for pc in range(12))
-        cd = c - COMMA
-        t2 = _NEAREST_COST.get(cd)
-        if t2 is None:
-            t2 = _NEAREST_COST[cd] = tuple(abs(acc(_spell_nearest(pc, cd))) for pc in range(12))
+    def _costs3(heard: list[int], c: float, sig: float = 0) -> tuple[int, int, int]:
+        """_cost_at at ``c``, ``c + COMMA`` and ``c - COMMA`` in one pass over the heard counts, counted from the key
+        signature ``sig`` (TS ``costAtCounts(counts, c, sig)``)."""
+        if sig == 0:
+            t0 = _NEAREST_COST.get(c)
+            if t0 is None:
+                t0 = _NEAREST_COST[c] = tuple(abs(acc(_spell_nearest(pc, c))) for pc in range(12))
+            cu = c + COMMA
+            t1 = _NEAREST_COST.get(cu)
+            if t1 is None:
+                t1 = _NEAREST_COST[cu] = tuple(abs(acc(_spell_nearest(pc, cu))) for pc in range(12))
+            cd = c - COMMA
+            t2 = _NEAREST_COST.get(cd)
+            if t2 is None:
+                t2 = _NEAREST_COST[cd] = tuple(abs(acc(_spell_nearest(pc, cd))) for pc in range(12))
+        else:
+            t0 = _sig_costs(c, sig)
+            t1 = _sig_costs(c + COMMA, sig)
+            t2 = _sig_costs(c - COMMA, sig)
         here = up = dn = 0
         for pc in range(12):
             k = heard[pc]
@@ -1103,6 +1130,12 @@ class SpellingEngine:
     def set_key(self, key_tonic: int) -> None:
         """Re-centre the spiral clamp-fold basin on a supplied key (major tonic LoF) mid-stream."""
         self._fold_center = key_tonic + 2
+
+    def set_signature(self, key_tonic: float) -> None:
+        """Set the key signature the ECONOMY fold counts accidentals from (``key_tonic`` as in :meth:`set_key`: the
+        relative major's tonic on the line of fifths, 0 = C). The two-pass tier calls it before each note-on with the
+        note's offline local key (``TwoPassOptions.key_side``). Inert under the clamp fold and fold ``'off'``."""
+        self._signature = key_tonic
 
     def side_key(self, x: Optional[float]) -> None:
         """KEY -> SIDE (look-ahead): call before each note-on with the note's side key (``side_key`` of

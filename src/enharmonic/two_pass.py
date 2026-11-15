@@ -17,6 +17,7 @@ from typing import Any, Iterable, Literal, NamedTuple, Optional, Sequence
 
 from .aug6 import outward_pairs
 from .key import LocalKey, degree_keys, local_keys
+from .key_side import centred_side_keys
 from .engine import TP_PASS_PRESET, Decision, SpellingEngine, with_onset_tolerance
 from .lof import spelling_of
 from .pitch import PitchClass
@@ -69,6 +70,13 @@ class TwoPassOptions:
     #: notes), so the engine's ``key_degree_gate`` keeps a note's letter on a semitone move into a pitch outside
     #: the key
     key_degree_gate: bool = True
+    #: KEY -> SIDE. A passage is written on the side of its local key's conventional signature, so both passes count
+    #: accidentals from that signature, not from C: each note's key is read offline on +-48 onsets centred on it
+    #: (:func:`enharmonic.centred_side_keys`, deepened along the spiral up to seven accidentals), and the passes'
+    #: accidental-economy fold counts from its signature. A key with six or seven accidentals (the F#/Gb tie or a
+    #: deepened key) is written either way and cannot choose: the pass counts from C there. Clair de lune m44-47
+    #: (Db major): the passes keep Debussy's Gb, Db, Eb, Ab instead of F#, C#, D#, G#.
+    key_side: bool = True
 
 
 @dataclass(frozen=True)
@@ -128,13 +136,22 @@ def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list
 
 #: ``triangle_free_context``: notes read on each side of a disagreement run for the context spellings.
 _CONTEXT_NOTES = 32
+#: ``key_side``: the most accidentals a key signature may have and still choose the side.
+_KEY_SIDE_MAX_ACCIDENTALS = 5
+
+
+def _side_signatures(notes: Sequence[TwoPassNote]) -> list[Optional[float]]:
+    """``key_side``: each note's signature for the passes (0 = count from C), None before any key is read."""
+    return [None if x is None else 0 if (math.isnan(x) or abs(x) > _KEY_SIDE_MAX_ACCIDENTALS) else x
+            for x in centred_side_keys(notes)]
 
 
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],
                 onset_tolerance: float = 0, frames: Optional[list[Optional[TwoPassFrame]]] = None,
                 outward: Optional[tuple[list[Optional[int]], list[int]]] = None,
                 keys: Optional[Sequence[Optional[LocalKey]]] = None,
-                deg_keys: Optional[Sequence[Optional[LocalKey]]] = None) -> list[Optional[int]]:
+                deg_keys: Optional[Sequence[Optional[LocalKey]]] = None,
+                signatures: Optional[Sequence[Optional[float]]] = None) -> list[Optional[int]]:
     s = SpellingEngine(with_onset_tolerance(TP_PASS_PRESET, onset_tolerance) if onset_tolerance else TP_PASS_PRESET)
     # Releases before strikes at equal t; strikes bass-first. Stable, like Array.prototype.sort.
     evs: list[tuple[float, bool, int]] = []
@@ -147,6 +164,10 @@ def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: 
     for t, on, i in evs:
         midi = notes[i].midi
         if on:
+            if signatures is not None:
+                sig = signatures[i]
+                if sig is not None:
+                    s.set_signature(sig)
             s.note_on(midi, t, dirs[i] if dirs is not None else 0, exact[i] if exact is not None else 0,
                       outward[0][i] if outward is not None else None, outward[1][i] if outward is not None else 0,
                       keys[i] if keys is not None else None, deg_keys[i] if deg_keys is not None else None)
@@ -250,7 +271,8 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     # The local keys are read in forward time on onsets centred on each note; the backward pass reads them too.
     keys_f = local_keys(N, "tonic-triad", 12) if opts.leading_tone_gate else None
     deg_f = degree_keys(N) if opts.key_degree_gate else None
-    fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f, keys_f, deg_f)
+    sig_f = _side_signatures(N) if opts.key_side else None
+    fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f, keys_f, deg_f, sig_f)
     T = max(x.t_off for x in N)
     b_notes = [TwoPassNote(x.midi, T - x.t_off, T - x.t_on) for x in N][::-1]
     b_dirs = None if backward_la == "off" else dirs_f[::-1]
@@ -258,7 +280,8 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
                         exact_f[::-1] if backward_la != "off" else None, opts.onset_tolerance, b_frames,
                         (out_f[0][::-1], out_f[1][::-1]) if out_f is not None else None,
                         keys_f[::-1] if keys_f is not None else None,
-                        deg_f[::-1] if deg_f is not None else None)
+                        deg_f[::-1] if deg_f is not None else None,
+                        sig_f[::-1] if sig_f is not None else None)
     bwd: list[Optional[int]] = [None] * n
     for k in range(n):
         bwd[n - 1 - k] = b_out[k]

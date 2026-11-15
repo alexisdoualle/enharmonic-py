@@ -178,3 +178,26 @@ def side_keys(notes: Sequence[KeyNote]) -> list[Optional[float]]:
             cur = r
         keys.append(cur)
     return _deepen(keys)
+
+
+#: :func:`centred_side_keys`: onsets read on each side of the note.
+CENTRED_SIDE_RADIUS = 48
+
+
+def _centred_keys(notes: Sequence[KeyNote], radius: int) -> list[Optional[LocalKey]]:
+    """Each note's key read on the onsets centred on it (+-radius), before deepening."""
+    S = _Scan(notes)
+    last = len(S.first) - 1
+    keys: list[Optional[LocalKey]] = []
+    for i in range(S.n):
+        o = S.onset_of[i]
+        keys.append(S.key(S.first[max(0, o - radius)], S.end[min(last, o + radius)]))
+    return keys
+
+
+def centred_side_keys(notes: Sequence[KeyNote], radius: int = CENTRED_SIDE_RADIUS) -> list[Optional[float]]:
+    """OFFLINE side keys, for the two-pass tier: each note's key is read on the onsets centred on it (+-48 onsets, the
+    note's own included), with the same table and deepening as :func:`side_keys` and no confirmation step (a centred
+    window already sees the passage on both sides). Same output convention: the relative major's tonic on the line
+    of fifths (deepened up to +-7), NaN for the F#/Gb tie, None for none. Not look-ahead legal."""
+    return _deepen(_centred_keys(notes, radius))
