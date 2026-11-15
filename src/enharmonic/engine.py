@@ -160,6 +160,11 @@ class EngineOptions:
     frame_margin: float = 1
     frame_keep_alive: bool = True
     frame_side: Literal["continuity", "drift"] = "continuity"
+    #: 'diatonic' frame: SEVEN-ACCIDENTAL TWIN. A frame move to a collection that needs seven or more accidentals is
+    #: written on its enharmonic twin when that twin needs five or fewer: C# minor moving to its parallel major lands
+    #: on Db major, not C# major (Chopin Op. 28/15 m75). Applies only when the frame moves to a new collection, not
+    #: when it holds one; off once a key signature is supplied (key_signature), which names the side itself.
+    frame_twin: bool = False
     frame_window: int = 128
     chromatic_sharp_lean: int = 0
     onset_tolerance: float = 0
@@ -205,6 +210,9 @@ RT_PRESET = EngineOptions(
     side_weight=1, side_radius=6, anchor_window=32,
     frame_mode="diatonic", vertical_weight=1, chromatic_sharp_lean=1, onset_revise=True,
     ornament_ms=80,
+    # A frame move to a seven-accidental collection lands on its twin with five or fewer (C# major -> Db major).
+    # Real-time only: in look-ahead the inferred side key re-centres the fold and undoes it.
+    frame_twin=True,
 )
 
 #: LOOK-AHEAD tier (``Speller(look_ahead=True)``). The mean-frame fields (collision_repair, fold_debounce,
@@ -301,6 +309,7 @@ class SpellingEngine:
         self._frame_keep_alive = o.frame_keep_alive
         self._frame_side = o.frame_side
         self._frame_window = o.frame_window
+        self._frame_twin = o.frame_twin
         self._chromatic_sharp_lean = o.chromatic_sharp_lean
         self._onset_tolerance = o.onset_tolerance
         self._onset_revise = o.onset_revise
@@ -977,7 +986,7 @@ class SpellingEngine:
         prev_side = abs(prev - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
         if prev_cov > thr and prev_side <= best_side:
             return prev
-        return best_c
+        return self._twin(best_c, prev)
 
     def _frame_centre_exact(self) -> int:
         """The TypeScript computation, reproduced bit for bit (and re-syncs the approximate counts)."""
@@ -1052,6 +1061,18 @@ class SpellingEngine:
         prev_side = abs(prev - anchor) + 1000 * max(0, (dc if dc >= 0 else -dc) - frad)
         if cov12[prev % 12] >= best_cov - self._frame_margin and prev_side <= best_side:
             return prev
+        return self._twin(best_c, prev)
+
+    def _twin(self, best_c: int, prev: int) -> int:
+        """SEVEN-ACCIDENTAL TWIN (frame_twin): a move to a NEW collection (not a comma shift of the held one) whose
+        placement needs seven or more accidentals (|tonic| >= 7) takes the twin a comma away when the twin needs five
+        or fewer. A supplied signature names the side itself, so the rule is off then."""
+        if self._frame_twin and self._signed_key is None and (best_c - prev) % 12 != 0:
+            tonic = best_c - 2
+            if abs(tonic) >= 7:
+                twin = best_c - 12 * (1 if tonic > 0 else -1)
+                if abs(twin - 2) <= 5:
+                    return twin
         return best_c
 
     def _diatonic_anchor(self) -> float:
