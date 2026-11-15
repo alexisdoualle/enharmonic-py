@@ -38,7 +38,12 @@ def run(sets: list[str], goldens: Path, verbose: bool) -> int:
         for mode, iid, thunk, want in iter_set(name, golden):
             r = results.setdefault(mode, ModeResult(name, mode))
             t0 = time.perf_counter()
-            got = thunk()
+            try:
+                got = thunk()
+            except Exception as e:  # a mode whose option or rule the port lacks: every note counts as a mismatch
+                got = []
+                if len(r.first) < 5:
+                    r.first.append(f"{iid}: {type(e).__name__}: {e}")
             r.seconds += time.perf_counter() - t0
             mism = compare(got, want)
             r.inputs += 1

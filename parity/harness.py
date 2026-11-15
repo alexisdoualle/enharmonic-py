@@ -45,8 +45,70 @@ def _streaming(factory: Callable[[], Any]) -> Callable[[list], list[Lof]]:
     return lambda ev: drive_lof(factory(), ev)
 
 
-def _tp(opts: TwoPassOptions) -> Callable[[list], list[Lof]]:
-    return lambda ev: spell_two_pass_lof(on_notes(ev), opts)
+def _tp(opts: Callable[[], TwoPassOptions]) -> Callable[[list], list[Lof]]:
+    # Options are built lazily, at replay time, so a mode whose option the port lacks fails alone.
+    return lambda ev: spell_two_pass_lof(on_notes(ev), opts())
+
+
+def _tp_sigs(sig: Callable[[int], Optional[int]], **kw: Any) -> Callable[[list], list[Lof]]:
+    def run(ev: list) -> list[Lof]:
+        notes = on_notes(ev)
+        return spell_two_pass_lof(notes, TwoPassOptions(key_signatures=[sig(i) for i in range(len(notes))], **kw))
+    return run
+
+
+def synth_sig(i: int) -> Optional[int]:
+    """export.mts ``synthSig``: every signature from -7 to +7 and None, 24 notes each."""
+    k = (i // 24) % 16
+    return None if k == 15 else k - 7
+
+
+class EngineSpeller:
+    """export.mts ``engineSpeller``: a streaming speller over the engine with preset overrides (options the Speller
+    does not expose), forwarding the look-ahead context exactly as :meth:`Speller.note_on` does."""
+
+    def __init__(self, look_ahead: bool, **overrides: Any) -> None:
+        from dataclasses import replace
+
+        from enharmonic.engine import LA_PRESET, RT_PRESET, SpellingEngine
+        self.look_ahead = look_ahead
+        self._e = SpellingEngine(replace(LA_PRESET if look_ahead else RT_PRESET, **overrides))
+        self._s = Speller.__new__(Speller)
+        self._s.look_ahead = look_ahead
+        self._s._engine = self._e
+
+    def note_on(self, midi: int, *a: Any, **kw: Any) -> None:
+        self._s.note_on(midi, *a, **kw)
+
+    def note_off(self, midi: int, t: Optional[float] = None) -> None:
+        self._e.note_off(midi, t)
+
+    def get_lof(self, midi: int) -> Optional[int]:
+        return self._e.get_lof(midi)
+
+
+class KeyedSpeller:
+    """export.mts ``keyedDrive``: keyTonic from a key change at note 0, set_key before each later change."""
+
+    def __init__(self, look_ahead: bool, keys: list) -> None:
+        first = next((k for i, k in keys if i == 0), None)
+        self._s = Speller(look_ahead=look_ahead, key_tonic=first) if first is not None else Speller(look_ahead=look_ahead)
+        self._at = {i: k for i, k in keys if i > 0}
+        self._i = 0
+        self.look_ahead = look_ahead
+
+    def note_on(self, midi: int, *a: Any, **kw: Any) -> None:
+        k = self._at.get(self._i)
+        if k is not None:
+            self._s.set_key(k)
+        self._i += 1
+        self._s.note_on(midi, *a, **kw)
+
+    def note_off(self, midi: int, t: Optional[float] = None) -> None:
+        self._s.note_off(midi, t)
+
+    def get_lof(self, midi: int) -> Optional[int]:
+        return self._s.get_lof(midi)
 
 
 EVENT_MODES: dict[str, Callable[[list], list[Lof]]] = {
@@ -60,14 +122,35 @@ EVENT_MODES: dict[str, Callable[[list], list[Lof]]] = {
     "la_keym5": _streaming(lambda: Speller(look_ahead=True, key_tonic=-5)),
     "core_g0_r0": _streaming(lambda: CoreSpeller(0, 3, 0, 0)),
     "core_dap2": _streaming(lambda: CoreSpeller(2, 3, 2, 8)),
-    "tp_honor": _tp(TwoPassOptions(honor_resolution=True)),
-    "tp_bwoff_m2": _tp(TwoPassOptions(backward_look_ahead="off", centre_margin=2)),
-    "tp_nocentre": _tp(TwoPassOptions(centre_tiebreak=False)),
-    "tp_tol30": _tp(TwoPassOptions(onset_tolerance=30)),
-    "tp_aug6off": _tp(TwoPassOptions(aug6_outward=False, aug6_wedge=False)),
-    "tp_ltoff": _tp(TwoPassOptions(leading_tone_gate=False)),
-    "tp_meetoff": _tp(TwoPassOptions(aug6_first_move_meet=False)),
-    "tp_kdgoff": _tp(TwoPassOptions(key_degree_gate=False)),
+    "tp_honor": _tp(lambda: TwoPassOptions(honor_resolution=True)),
+    "tp_bwoff_m2": _tp(lambda: TwoPassOptions(backward_look_ahead="off", centre_margin=2)),
+    "tp_nocentre": _tp(lambda: TwoPassOptions(centre_tiebreak=False)),
+    "tp_tol30": _tp(lambda: TwoPassOptions(onset_tolerance=30)),
+    "tp_aug6off": _tp(lambda: TwoPassOptions(aug6_outward=False, aug6_wedge=False)),
+    "tp_ltoff": _tp(lambda: TwoPassOptions(leading_tone_gate=False)),
+    "tp_meetoff": _tp(lambda: TwoPassOptions(aug6_first_move_meet=False)),
+    "tp_kdgoff": _tp(lambda: TwoPassOptions(key_degree_gate=False)),
+    "rt_keym5": _streaming(lambda: Speller(key_tonic=-5)),
+    "rt_twinoff": _streaming(lambda: EngineSpeller(False, frame_twin=False)),
+    "rt_mltoff": _streaming(lambda: EngineSpeller(False, minor_leading_tone=False)),
+    "la_pvoff": _streaming(lambda: EngineSpeller(True, aug6_passing_voice=False)),
+    "tp_chord3": _tp(lambda: TwoPassOptions(aug6_chord_meet=3)),
+    "tp_runoff": _tp(lambda: TwoPassOptions(run_boundary=False)),
+    "tp_trioff": _tp(lambda: TwoPassOptions(triangle_free_context=False)),
+    "tp_sideoff": _tp(lambda: TwoPassOptions(key_side=False)),
+    "tp_retoff": _tp(lambda: TwoPassOptions(key_return=False)),
+    "tp_triadoff": _tp(lambda: TwoPassOptions(struck_triad_third=False)),
+    "tp_sfoff": _tp(lambda: TwoPassOptions(short_flip=False)),
+    "tp_sigm6": _tp_sigs(lambda i: -6),
+    "tp_sigvar": _tp_sigs(synth_sig),
+    "tp_sigoff": _tp_sigs(lambda i: -6, key_signature_anchor=False),
+}
+
+#: Per-fixture keyed modes (export.mts keyedDrive / keySignatures); they read the golden's ``keyed`` entry.
+KEYED_MODES: dict[str, Callable[[list, dict], list[Lof]]] = {
+    "rt_keyed": lambda ev, k: drive_lof(KeyedSpeller(False, k["keys"]), ev),
+    "la_keyed": lambda ev, k: drive_lof(KeyedSpeller(True, k["keys"]), ev),
+    "tp_keyed": lambda ev, k: spell_two_pass_lof(on_notes(ev), TwoPassOptions(key_signatures=k["sigs"])),
 }
 
 
@@ -139,9 +222,13 @@ def iter_set(name: str, golden: dict[str, Any]) -> Iterator[tuple[str, str, Call
                 cache[iid] = fixture_events(LAB_FIXTURES / iid / "events.json")
             return cache[iid]
 
+        keyed = golden.get("keyed", {})
         for mode, per in modes.items():
             for iid, want in per.items():
-                yield mode, iid, (lambda iid=iid, f=EVENT_MODES[mode]: f(ev(iid))), want
+                if mode in KEYED_MODES:
+                    yield mode, iid, (lambda iid=iid, f=KEYED_MODES[mode]: f(ev(iid), keyed[iid])), want
+                else:
+                    yield mode, iid, (lambda iid=iid, f=EVENT_MODES[mode]: f(ev(iid))), want
     elif name.startswith("meredith-"):
         variant = name.split("-", 1)[1]
         stem = "opnd-m-noisy" if variant == "noisy" else "opnd-m"

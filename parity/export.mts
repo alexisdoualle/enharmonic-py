@@ -49,6 +49,7 @@ const twoPassM = await imp('src/two-pass.ts');
 const kernelM = await imp('src/kernel.ts');
 const fixturesM = await imp('test/eval/fixtures.ts');
 const { Speller, spellTwoPass } = index;
+const { SpellingEngine, RT_PRESET, LA_PRESET } = engineM;
 const { CoreSpeller } = coreM;
 const { lofOf } = lofM;
 
@@ -86,7 +87,40 @@ const EXTRA: Record<string, (ev: Ev[]) => Lof[]> = {
     tp_ltoff: ev => spellTwoPass(fixturesM.onNotes(ev), { leadingToneGate: false }).map(toLof),
     tp_meetoff: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6FirstMoveMeet: false }).map(toLof),
     tp_kdgoff: ev => spellTwoPass(fixturesM.onNotes(ev), { keyDegreeGate: false }).map(toLof),
+    // Options added after prod 1cb2979; at an older commit JS ignores the unknown option, so the golden equals
+    // the preset's (the Python harness then replays the same option, which the port must accept).
+    rt_keym5: ev => fixturesM.drive(new Speller({ keyTonic: -5 }), ev).map(toLof),
+    rt_twinoff: ev => fixturesM.drive(engineSpeller(false, { frameTwin: false }), ev).map(toLof),
+    rt_mltoff: ev => fixturesM.drive(engineSpeller(false, { minorLeadingTone: false }), ev).map(toLof),
+    la_pvoff: ev => fixturesM.drive(engineSpeller(true, { aug6PassingVoice: false }), ev).map(toLof),
+    tp_chord3: ev => spellTwoPass(fixturesM.onNotes(ev), { aug6ChordMeet: 3 }).map(toLof),
+    tp_runoff: ev => spellTwoPass(fixturesM.onNotes(ev), { runBoundary: false }).map(toLof),
+    tp_trioff: ev => spellTwoPass(fixturesM.onNotes(ev), { triangleFreeContext: false }).map(toLof),
+    tp_sideoff: ev => spellTwoPass(fixturesM.onNotes(ev), { keySide: false }).map(toLof),
+    tp_retoff: ev => spellTwoPass(fixturesM.onNotes(ev), { keyReturn: false }).map(toLof),
+    tp_triadoff: ev => spellTwoPass(fixturesM.onNotes(ev), { struckTriadThird: false }).map(toLof),
+    tp_sfoff: ev => spellTwoPass(fixturesM.onNotes(ev), { shortFlip: false }).map(toLof),
+    tp_sigm6: ev => { const on = fixturesM.onNotes(ev); return spellTwoPass(on, { keySignatures: on.map(() => -6) }).map(toLof); },
+    tp_sigvar: ev => { const on = fixturesM.onNotes(ev); return spellTwoPass(on, { keySignatures: on.map((_: unknown, i: number) => synthSig(i)) }).map(toLof); },
+    tp_sigoff: ev => { const on = fixturesM.onNotes(ev); return spellTwoPass(on, { keySignatures: on.map(() => -6), keySignatureAnchor: false }).map(toLof); },
 };
+/** tp_sigvar: a synthetic signature per note, every value from -7 to +7 and null, 24 notes each (same as the C++
+ *  port's; keep in step with parity/harness.py). */
+function synthSig(i: number): number | null { const k = Math.floor(i / 24) % 16; return k === 15 ? null : k - 7; }
+/** A streaming speller over the engine with preset overrides (options the Speller does not expose), forwarding the
+ *  look-ahead context exactly as Speller.noteOn does. */
+function engineSpeller(la: boolean, extra: Record<string, unknown>) {
+    const e = new SpellingEngine({ ...(la ? LA_PRESET : RT_PRESET), ...extra });
+    return {
+        lookAhead: la,
+        noteOn(m: number, ctx: Record<string, any> = {}) {
+            if (ctx.sideKey !== undefined && e.sideKey) e.sideKey(ctx.sideKey);
+            e.noteOn(m, ctx.t, ctx.resolveDir ?? 0, ctx.resolveExact ?? 0, ctx.outwardPartner, ctx.outwardRole ?? 0, ctx.localKey, ctx.degreeKey, ctx.dominant);
+        },
+        noteOff: (m: number, c: { t?: number } = {}) => e.noteOff(m, c.t),
+        getSpelling: (m: number) => e.getSpelling(m),
+    };
+}
 const CURATED: readonly string[] = fixturesM.FIXTURES;
 
 function runModes(ev: Ev[], extra: boolean): Record<string, Lof[]> {
@@ -154,19 +188,68 @@ function exportRandom(): void {
 }
 
 // ── set: lab fixtures ─────────────────────────────────────────────────────────
+/** The key hint as a notation program would give it: each `respell` event of a fixture (a key signature, as its
+ *  7-note scale) becomes keyTonic = the scale's mean line-of-fifths - 2 (a major collection is centred on tonic +
+ *  2). The key in force before the first note is the constructor's `keyTonic`; each later one is `setKey` right
+ *  before the next note-on. Returns [on-event index, keyTonic] pairs. (Same as the C++ port's exporter.) */
+function keyChanges(path: string): [number, number][] {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as { type: string; scale?: { letter: string; accidental: number }[] }[];
+    const out: [number, number][] = [];
+    let onIdx = 0, pend: number | null = null;
+    for (const e of raw) {
+        if (e.type === 'respell' && e.scale) pend = e.scale.reduce((a, p) => a + lofOf({ step: p.letter, alter: p.accidental }), 0) / 7 - 2;
+        else if (e.type === 'on') { if (pend !== null) { out.push([onIdx, pend]); pend = null; } onIdx++; }
+    }
+    return out;
+}
+/** Each on-event's notated key signature for two-pass keySignatures: the sum of the accidentals of the last
+ *  `respell` event's scale (signed sharps - flats), null before the first. */
+function noteSignatures(path: string): (number | null)[] {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as { type: string; scale?: { letter: string; accidental: number }[] }[];
+    const out: (number | null)[] = [];
+    let sig: number | null = null;
+    for (const e of raw) {
+        if (e.type === 'respell' && e.scale) sig = e.scale.reduce((a, p) => a + p.accidental, 0);
+        else if (e.type === 'on') out.push(sig);
+    }
+    return out;
+}
+/** Drive a Speller with the key hint: keyTonic from a change at note 0, setKey before each later change. */
+function keyedDrive(la: boolean, ev: Ev[], keys: [number, number][]): Lof[] {
+    const first = keys.find(([i]) => i === 0);
+    const s = new Speller(first ? { lookAhead: la, keyTonic: first[1] } : { lookAhead: la });
+    const at = new Map(keys.filter(([i]) => i > 0));
+    let i = 0;
+    const wrapped = {
+        lookAhead: la,
+        noteOn(m: number, ctx: object) { const k = at.get(i); if (k !== undefined) s.setKey(k); i++; s.noteOn(m, ctx); },
+        noteOff: (m: number, c: object) => s.noteOff(m, c),
+        getSpelling: (m: number) => s.getSpelling(m),
+    };
+    return fixturesM.drive(wrapped, ev).map(toLof);
+}
+
 function exportFixtures(): void {
     const ids = readdirSync(LAB).filter(d => existsSync(join(LAB, d, 'events.json'))).sort();
     const modes: Record<string, Record<string, Lof[]>> = {};
     const inputs: Record<string, { sha256: string; notes: number }> = {};
+    const keyed: Record<string, { keys: [number, number][]; sigs: (number | null)[] }> = {};
     for (const id of ids) {
         const path = join(LAB, id, 'events.json');
         const ev = loadEventsAt(path);
         inputs[id] = { sha256: sha256(readFileSync(path)), notes: ev.filter(e => e.type === 'on').length };
         for (const [m, v] of Object.entries(runModes(ev, CURATED.includes(id)))) (modes[m] ??= {})[id] = v;
+        // Keyed runs: the key hint from the fixture's respell events (streaming: keyTonic / setKey; two-pass:
+        // keySignatures), stored with the goldens so the Python harness drives exactly the same calls.
+        const keys = keyChanges(path), sigs = noteSignatures(path);
+        keyed[id] = { keys, sigs };
+        (modes.rt_keyed ??= {})[id] = keyedDrive(false, ev, keys);
+        (modes.la_keyed ??= {})[id] = keyedDrive(true, ev, keys);
+        (modes.tp_keyed ??= {})[id] = spellTwoPass(fixturesM.onNotes(ev), { keySignatures: sigs }).map(toLof);
         process.stdout.write('.');
     }
     process.stdout.write('\n');
-    writeGz('fixtures.json.gz', header('fixtures', { root: LAB, inputs, modes }));
+    writeGz('fixtures.json.gz', header('fixtures', { root: LAB, inputs, keyed, modes }));
 }
 
 // ── set: Meredith (copied from prod test/eval/meredith.ts; keep in step) ─────────
@@ -213,8 +296,10 @@ function predictMeredith(mode: 'core' | 'rt' | 'la' | 'tp', notes: Note[]): Lof[
         return spellTwoPass(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS, tOff: (n.onset + n.dur) * TATUM_MS }))).map(toLof);
     }
     const s = mode === 'core' ? new CoreSpeller() : new Speller({ lookAhead: mode === 'la' });
-    const dirs = mode === 'la' ? resolveDirs(notes) : null;
-    const exact = mode === 'la' ? resolveDirs(notes, true) : null;
+    // Prod commits before e8b68ed read the 16-note buffer only (resolveDirs above); later ones resolutionDirs.
+    const rd = mode === 'la' && index.resolutionDirs ? index.resolutionDirs(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS }))) as { dir: number[]; exact: number[] } : null;
+    const dirs = mode === 'la' ? (rd ? rd.dir : resolveDirs(notes)) : null;
+    const exact = mode === 'la' ? (rd ? rd.exact : resolveDirs(notes, true)) : null;
     // Prod commits before the aug6 rule have no outwardPairs (and no outward context).
     const pairs = mode === 'la' && index.outwardPairs
         ? index.outwardPairs(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS, tOff: (n.onset + n.dur) * TATUM_MS }))) as { partner: number[]; role: number[] }
@@ -227,6 +312,13 @@ function predictMeredith(mode: 'core' | 'rt' | 'la' | 'tp', notes: Note[]): Lof[
     const degKeys = mode === 'la' && index.degreeKeys
         ? index.degreeKeys(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS }))) as unknown[]
         : null;
+    // Prod commits before 5424f2f have no sideKeys, before 1cb13a2 no dominantChords.
+    const sides = mode === 'la' && index.sideKeys
+        ? index.sideKeys(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS }))) as (number | null)[]
+        : null;
+    const doms = mode === 'la' && index.dominantChords
+        ? index.dominantChords(notes.map(n => ({ midi: n.midi, tOn: n.onset * TATUM_MS, tOff: (n.onset + n.dur) * TATUM_MS }))) as unknown[]
+        : null;
     const pred: Lof[] = new Array(notes.length).fill(null);
     const pend = new Map<number, number[]>();
     for (const e of events(notes)) {
@@ -237,6 +329,8 @@ function predictMeredith(mode: 'core' | 'rt' | 'la' | 'tp', notes: Note[]): Lof[
                 ...(y >= 0 ? { outwardPartner: notes[y]!.midi, outwardRole: pairs!.role[e.i]! } : {}),
                 ...(keys ? { localKey: keys[e.i] } : {}),
                 ...(degKeys ? { degreeKey: degKeys[e.i] } : {}),
+                ...(sides ? { sideKey: sides[e.i]! } : {}),
+                ...(doms ? { dominant: doms[e.i] } : {}),
             });
             (pend.get(e.midi) ?? pend.set(e.midi, []).get(e.midi)!).push(e.i);
         } else {
