@@ -181,15 +181,17 @@ RT_PRESET = EngineOptions(
     ornament_ms=80,
 )
 
-#: LOOK-AHEAD tier (``Speller(look_ahead=True)``).
+#: LOOK-AHEAD tier (``Speller(look_ahead=True)``). The mean-frame fields (collision_repair, fold_debounce,
+#: anchor_window, the clamp fold mode) are not set: the diatonic frame returns before the code that reads them. The
+#: fold RANGE (fold_center / fold_radius) is live: it bounds the frame's placement on the spiral.
 LA_PRESET = EngineOptions(
     recency_guard=2, guard_window=7,
-    fold="clamp", fold_center=3, fold_radius=7, fold_debounce=8,
+    fold_center=3, fold_radius=7,
     look_ahead=True, look_ahead_weight=2, leading_tone_boost=1,
-    double_acc_penalty=2, collision_repair=True,
+    double_acc_penalty=2,
     frame_mode="diatonic", onset_revise=True, guard_raise_line=True,
     aug6_outward=True, leading_tone_gate=True, key_degree_gate=True, held_letter_target=True,
-    side_weight=1, side_radius=8, anchor_window=32,
+    side_weight=1, side_radius=8,
     ornament_ms=80,
     vertical_weight=2, vertical_pc_triad=True,
 )
