@@ -165,6 +165,13 @@ class EngineOptions:
     #: on Db major, not C# major (Chopin Op. 28/15 m75). Applies only when the frame moves to a new collection, not
     #: when it holds one; off once a key signature is supplied (key_signature), which names the side itself.
     frame_twin: bool = False
+    #: 'diatonic' frame: MINOR COLLECTION. A minor key's collection holds its leading tone: when the frame's collection
+    #: is heard as its relative minor, a note outside the collection is scored with the minor's raised 7th in that slot
+    #: (C minor: B, not Bb), whether or not the 7th sounded recently. In C minor, G-?-G with only Bb heard spells F#,
+    #: not Gb. The minor reading: the local key when the caller supplies one (``local_key``), else the relative minor's
+    #: tonic triad outweighs the major's on the frame's own recency-weighted raw pitch classes. Not while the b7
+    #: sounds, nor when a kept alteration holds the slot.
+    minor_leading_tone: bool = False
     frame_window: int = 128
     chromatic_sharp_lean: int = 0
     onset_tolerance: float = 0
@@ -213,6 +220,9 @@ RT_PRESET = EngineOptions(
     # A frame move to a seven-accidental collection lands on its twin with five or fewer (C# major -> Db major).
     # Real-time only: in look-ahead the inferred side key re-centres the fold and undoes it.
     frame_twin=True,
+    # A minor key's collection holds its leading tone: a chromatic note heard in the frame's relative minor is scored
+    # with the raised 7th in its slot (C minor G-F#-G, not Gb). Real-time only.
+    minor_leading_tone=True,
 )
 
 #: LOOK-AHEAD tier (``Speller(look_ahead=True)``). The mean-frame fields (collision_repair, fold_debounce,
@@ -310,6 +320,7 @@ class SpellingEngine:
         self._frame_side = o.frame_side
         self._frame_window = o.frame_window
         self._frame_twin = o.frame_twin
+        self._minor_leading_tone = o.minor_leading_tone
         self._chromatic_sharp_lean = o.chromatic_sharp_lean
         self._onset_tolerance = o.onset_tolerance
         self._onset_revise = o.onset_revise
@@ -377,6 +388,7 @@ class SpellingEngine:
         self._fold_centre: float = 2
         self._frame_centre = 2
         self._last_decision: Optional[tuple[tuple[int, ...], list[_Row], int]] = None
+        self._decide_scale: tuple[int, ...] = ()
         # Pitch-class counts of _pc_window + _cur_onset_pcs (the 'mean' fold's "heard"), kept incrementally.
         self._heard_counts: list[int] = [0] * 12
         # Per-onset cache for the diatonic frame (the window only changes at a new onset); see
@@ -509,7 +521,7 @@ class SpellingEngine:
         if best is None:
             return
         # Slot order (fifths); decision() reorders C..B only when asked.
-        self._last_decision = (tuple(self._scale), rows, best)
+        self._last_decision = (self._decide_scale, rows, best)
         self._active[midi] = best
         self._held[midi] = self._held.get(midi, 0) + 1
         self._last_commit = best
@@ -545,9 +557,49 @@ class SpellingEngine:
 
     def _decide(self, midi: int, resolve_dir: int, resolve_exact: int, self_midi: Optional[int],
                 trace: bool) -> tuple[Optional[int], list[_Row]]:
+        # MINOR COLLECTION (minor_leading_tone): a note outside the frame's collection is scored with the relative
+        # minor's raised 7th in its slot when the collection is heard as that minor.
+        if self._minor_leading_tone and self._frame_mode == "diatonic" and (midi % 12) not in _collection_pcs(self._frame_centre):
+            live = self._scale
+            self._scale = list(live)
+            self._raise_minor_leading_tone(midi)
+            try:
+                return self._decide_on(midi, resolve_dir, resolve_exact, self_midi, trace)
+            finally:
+                self._scale = live
+        return self._decide_on(midi, resolve_dir, resolve_exact, self_midi, trace)
+
+    def _raise_minor_leading_tone(self, midi: int) -> None:
+        """MINOR COLLECTION: put the relative minor's raised 7th in its slot when the frame's collection is heard as
+        that minor, the slot still holds the frame's own b7, and the b7 is not sounding. The minor reading: the
+        caller's local key, else the two tonic triads on the frame's evidence."""
+        c = self._frame_centre
+        flat7, lt = c - 1, c + 6
+        s = letter(lt)
+        if self._scale[s] != flat7:  # a kept alteration already holds the slot
+            return
+        t, T = pitch_class(c + 1), pitch_class(c - 2)  # minor and major tonics
+        k = self._cur_onset_key.get(midi)
+        if k is not None:
+            minor = k.minor and k.tonic == t
+        else:
+            h = self._exact_counts()
+            minor = h[t] + h[(t + 3) % 12] + h[(t + 7) % 12] > h[T] + h[(T + 4) % 12] + h[(T + 7) % 12]
+        if not minor:
+            return
+        f7 = pitch_class(flat7)
+        for m in self._active:
+            if m % 12 == f7:
+                return
+        self._scale[s] = lt
+
+    def _decide_on(self, midi: int, resolve_dir: int, resolve_exact: int, self_midi: Optional[int],
+                   trace: bool) -> tuple[Optional[int], list[_Row]]:
         # Hot path: letter(n) = (n + 1) % 7, acc(n) = (n + 1) // 7 and pitch_class(n) = (7 * n) % 12 are
         # inlined, and interval_score is inlined over CONSONANCE_BY_DISTANCE (integer sums, order-free).
         scale = self._scale
+        if trace:
+            self._decide_scale = tuple(scale)  # the surface scored against (Decision.scale)
         la_on = self._look_ahead_on and resolve_dir != 0
         # LEADING-TONE GATE: a falling note that is a leading tone of the local key keeps the key's name.
         if la_on and resolve_dir == -1 and self._leading_tone_gate:
@@ -990,6 +1042,14 @@ class SpellingEngine:
 
     def _frame_centre_exact(self) -> int:
         """The TypeScript computation, reproduced bit for bit (and re-syncs the approximate counts)."""
+        counts = self._exact_counts()
+        self._approx = list(self._frame_base)  # type: ignore[arg-type]
+        self._approx_age = 0
+        return self._frame_centre_from(counts)
+
+    def _exact_counts(self) -> list[float]:
+        """TS ``frameCounts()`` bit for bit: the recency-weighted raw-pc histogram over the frame window (the current
+        onset weighs 1, each older onset x decay^age)."""
         cur = self._cur_onset_pcs
         # counts[pc] in TS is a left fold over float additions: 1.0 once per current-onset occurrence, then
         # the decayed weight of every window occurrence, newest first. Floats are not associative, so the
@@ -1016,8 +1076,6 @@ class SpellingEngine:
                 for seq in reversed(occ[pc]):
                     v += W[top - seq]
                 base[pc] = v
-        self._approx = list(base)
-        self._approx_age = 0
         counts = list(base)
         c0: dict[int, int] = {}
         for pc in cur:
@@ -1028,7 +1086,9 @@ class SpellingEngine:
             if v is None:
                 v = memo[key] = fold(pc, k)
             counts[pc] = v
+        return counts
 
+    def _frame_centre_from(self, counts: list[float]) -> int:
         # coverage(c) depends on c only mod 12: the 7 counts at c-3 .. c+3 summed left to right, as TS does
         # (TS starts from 0.0, and 0.0 + x == x exactly for these non-negative counts).
         cov12 = [counts[a] + counts[b] + counts[c] + counts[d] + counts[e] + counts[f] + counts[g]
