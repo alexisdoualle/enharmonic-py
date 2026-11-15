@@ -232,3 +232,36 @@ def centred_side_keys(notes: Sequence[KeyNote], radius: int = CENTRED_SIDE_RADIU
     ``_deepen``; ``TwoPassOptions.key_return``)."""
     return _deepen(_centred_keys(notes, radius), key_return)
 
+
+#: :func:`anchored_side_keys`: the most fifths a local key may lie from the notated signature and still be in its
+#: diatonic neighbourhood (the closely related keys, whose collections share six of seven notes with it).
+SIGNATURE_NEIGHBOURHOOD = 1
+
+
+def anchored_side_keys(notes: Sequence[KeyNote], sigs: Sequence[Optional[float]], inferred: Sequence[Optional[float]],
+                       radius: int = CENTRED_SIDE_RADIUS) -> list[Optional[float]]:
+    """NOTATED SIGNATURE -> SIDE (two-pass ``key_signatures``). Proposition: a passage is notated on the side of its key
+    signature while its local key stays within one fifth of it. Each note's centred local key (as
+    :func:`centred_side_keys`, +-radius onsets) is read as its enharmonic reading nearest the signature ``sigs[i]``,
+    within +-7 accidentals (a tie in distance goes to fewer accidentals, then the flat side). Within
+    ``SIGNATURE_NEIGHBOURHOOD`` fifths of the signature, the side is the signature; farther, or with no signature
+    (None), it is ``inferred[i]``, the side read from the notes alone. Chopin, Sonata No. 2/ii (Eb minor, six flats):
+    the signature settles the F#/Gb tie the inferred key cannot. Not look-ahead legal."""
+    out: list[Optional[float]] = []
+    for i, k in enumerate(_centred_keys(notes, radius)):
+        s = sigs[i] if i < len(sigs) else None
+        inf = inferred[i] if i < len(inferred) else None
+        if s is None:
+            out.append(inf)
+            continue
+        if k is None:
+            out.append(s)
+            continue
+        x = _x_of(k)
+        cands = [c for c in ([-6, 6] if math.isnan(x) else [x, x + 12, x - 12]) if abs(c) <= _DEEPEN]
+        near = cands[0]
+        for c in cands[1:]:
+            if abs(c - s) < abs(near - s) or (abs(c - s) == abs(near - s) and abs(c) < abs(near)):
+                near = c
+        out.append(s if abs(near - s) <= SIGNATURE_NEIGHBOURHOOD else inf)
+    return out

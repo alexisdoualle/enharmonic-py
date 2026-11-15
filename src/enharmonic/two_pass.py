@@ -17,7 +17,7 @@ from typing import Any, Iterable, Literal, NamedTuple, Optional, Sequence
 
 from .aug6 import outward_pairs
 from .key import LocalKey, degree_keys, local_keys
-from .key_side import centred_side_keys
+from .key_side import anchored_side_keys, centred_side_keys
 from .engine import TP_PASS_PRESET, Decision, SpellingEngine, with_onset_tolerance
 from .lof import spelling_of
 from .pitch import PitchClass
@@ -90,6 +90,16 @@ class TwoPassOptions:
     #: G#->A over F-C). One shot: nothing it writes feeds another decision. Mozart K. 459/iii, F minor, Ab-C-F struck
     #: together: the merge wrote G#, the rule writes Mozart's Ab.
     struck_triad_third: bool = True
+    #: Each input note's NOTATED key signature, in the caller's order: signed sharps - flats (0 = none, -6 = six flats;
+    #: the relative major's tonic on the line of fifths), None where unknown. Optional; read by
+    #: ``key_signature_anchor``. Must have one entry per note.
+    key_signatures: Optional[Sequence[Optional[int]]] = None
+    #: THE SIGNATURE ANCHORS THE SIDE (``key_side``, with ``key_signatures``). A passage is notated on the side of its
+    #: key signature while its local key stays within one fifth of it: there the passes count accidentals from the
+    #: notated signature; farther, they count from the inferred key (:func:`enharmonic.anchored_side_keys`). Chopin
+    #: Sonata 2/ii (Eb minor, six flats): the signature settles the F#/Gb tie and m114-179 keep Chopin's Db, Cb, Gb.
+    #: Inert without ``key_signatures`` or when ``key_side`` is off.
+    key_signature_anchor: bool = True
 
 
 @dataclass(frozen=True)
@@ -240,6 +250,24 @@ def _side_signatures(notes: Sequence[TwoPassNote], key_return: bool) -> list[Opt
             for x in centred_side_keys(notes, key_return=key_return)]
 
 
+def _pass_signatures(notes: Sequence[TwoPassNote], opts: TwoPassOptions,
+                     notated: Optional[Sequence[Optional[int]]]) -> list[Optional[float]]:
+    """``key_side``: the per-note signatures for the passes (sorted order). With ``key_signature_anchor`` and notated
+    signatures, the notated signature where the local key is within one fifth of it, else the inferred one."""
+    inferred = _side_signatures(notes, opts.key_return)
+    return anchored_side_keys(notes, notated, inferred) if notated is not None and opts.key_signature_anchor else inferred
+
+
+def _notated_signatures(idx: list[int], n: int, opts: TwoPassOptions) -> Optional[list[Optional[int]]]:
+    """``key_signatures`` in sorted order (None when not given)."""
+    ks = opts.key_signatures
+    if ks is None:
+        return None
+    if len(ks) != n:
+        raise ValueError(f"key_signatures has {len(ks)} entries for {n} notes")
+    return [ks[i] for i in idx]
+
+
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],
                 onset_tolerance: float = 0, frames: Optional[list[Optional[TwoPassFrame]]] = None,
                 outward: Optional[tuple[list[Optional[int]], list[int]]] = None,
@@ -345,7 +373,8 @@ class _CoreResult(NamedTuple):
     last_stable: int
 
 
-def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames: bool = False) -> _CoreResult:
+def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames: bool = False,
+                   notated: Optional[Sequence[Optional[int]]] = None) -> _CoreResult:
     backward_la = opts.backward_look_ahead
     centre_tiebreak = opts.centre_tiebreak
     centre_margin = opts.centre_margin
@@ -365,7 +394,7 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     # The local keys are read in forward time on onsets centred on each note; the backward pass reads them too.
     keys_f = local_keys(N, "tonic-triad", 12) if opts.leading_tone_gate else None
     deg_f = degree_keys(N) if opts.key_degree_gate else None
-    sig_f = _side_signatures(N, opts.key_return) if opts.key_side else None
+    sig_f = _pass_signatures(N, opts, notated) if opts.key_side else None
     fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f, keys_f, deg_f, sig_f)
     T = max(x.t_off for x in N)
     b_notes = [TwoPassNote(x.midi, T - x.t_off, T - x.t_on) for x in N][::-1]
@@ -617,7 +646,7 @@ def spell_two_pass_lof(notes: Iterable[Any], opts: TwoPassOptions = TwoPassOptio
     if not ns:
         return []
     idx = _order(ns)
-    core = _two_pass_core([ns[i] for i in idx], opts)
+    core = _two_pass_core([ns[i] for i in idx], opts, False, _notated_signatures(idx, len(ns), opts))
     return _restore(idx, core.spellings)
 
 
@@ -636,7 +665,7 @@ def spell_two_pass_traced(notes: Iterable[Any], opts: TwoPassOptions = TwoPassOp
     if not ns:
         return TwoPassTrace([], [], None, None)
     idx = _order(ns)
-    core = _two_pass_core([ns[i] for i in idx], opts, True)
+    core = _two_pass_core([ns[i] for i in idx], opts, True, _notated_signatures(idx, len(ns), opts))
     spellings = _restore(idx, [_to_pc(n) for n in core.spellings])
     traces: list[TwoPassNoteTrace] = []
     for k, sp in enumerate(core.spellings):
