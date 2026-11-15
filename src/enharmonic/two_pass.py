@@ -50,6 +50,15 @@ class TwoPassOptions:
     #: the bass repeats Eb four times under Cb and Bb; the forward pass reads the bar sharp, the backward pass flat,
     #: and the cut may no longer fall between the strikes (D# x6 then Eb).
     run_boundary: bool = True
+    #: NO TRIANGLE, NO SIDE BOUNDARY. A sonority with no major or minor triad in it (a diminished seventh, an augmented
+    #: triad, a bare dyad, any other triangle-free set of two or more pitch classes) names its tones only relative to
+    #: each other, so it cannot say where a passage changes side. Where the passes disagree over a run made at least
+    #: half of such notes, the merge does not place a side boundary by them: each pitch class takes the spelling the
+    #: surrounding notes give it (the last merged spelling before the run, the first agreed one after it, within 32
+    #: notes each way), and the wolf count decides only among change-points that keep them. If the context before and
+    #: after the run spells some pitch class two ways, the rule abstains. WTC II m68: B#, F#, A#, G# in dyads and
+    #: triangle-free three-note sets; the rule writes Bach's sharps.
+    triangle_free_context: bool = True
     #: an aug6 pair (ten fifths) whose sharper tone rises and flatter tone falls is not a wolf in the merge
     aug6_wedge: bool = True
     #: feed both passes each note's local key (the engine's ``leading_tone_gate``): the ``"tonic-triad"`` table
@@ -131,6 +140,10 @@ def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list
     """Exact-pitch up/down resolution within the next ``horizon`` notes."""
     midis = [x.midi for x in notes]
     return _next_step(midis, [m + 1 for m in midis], [m - 1 for m in midis], horizon)
+
+
+#: ``triangle_free_context``: notes read on each side of a disagreement run for the context spellings.
+_CONTEXT_NOTES = 32
 
 
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],
@@ -323,6 +336,21 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
                 return False
         return True
 
+    # NO TRIANGLE, NO SIDE BOUNDARY (see triangle_free_context). A note is triangle-free when the pitch classes
+    # sounding during it hold no major or minor triad and it is not a lone pitch class (a single pc inside a dim7 pair
+    # still counts: the dim7 is the sonority).
+    def has_triad(st: set[int]) -> bool:
+        for r in st:
+            if (r + 7) % 12 in st and ((r + 4) % 12 in st or (r + 3) % 12 in st):
+                return True
+        return False
+
+    def dim7_note(t: int) -> bool:
+        return (t > 0 and in_dim7(t - 1, t)) or (t + 1 < n and in_dim7(t, t + 1))
+
+    tri_free: Optional[list[bool]] = (
+        [not has_triad(sounding[t]) and (len(sounding[t]) >= 2 or dim7_note(t)) for t in range(n)]
+        if opts.triangle_free_context else None)
     runs = _run_pairs(N) if opts.run_boundary else []
     run_at = 0  # runs[] sorted by first strike; disagreement runs only move forward
     i = max(0, first_agree)
@@ -378,6 +406,47 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
             cost.append(c)
             if c < min_cost:
                 min_cost = c
+        # A run made mostly of triangle-free notes: each context spelling (before, after) that a change-point
+        # contradicts costs more than any wolf count.
+        if tri_free is not None and sum(1 for t in range(i, j) if tri_free[t]) >= (j - i) / 2:
+            ctx: dict[int, list[Optional[int]]] = {}
+            t, c = i - 1, 0
+            while t >= 0 and c < _CONTEXT_NOTES:
+                if out[t] is not None:
+                    c += 1
+                    ctx.setdefault(pcs_n[t], [out[t]])
+                t -= 1
+            after: dict[int, Optional[int]] = {}
+            t, c = j, 0
+            while t < n and c < _CONTEXT_NOTES:
+                if agree_arr[t]:
+                    c += 1
+                    if pcs_n[t] not in after:
+                        after[pcs_n[t]] = fwd[t]
+                t += 1
+            split = False
+            for q, v in after.items():
+                a = ctx.get(q)
+                if a is not None:
+                    if a[0] != v:
+                        split = True
+                    a.append(v)
+                else:
+                    ctx[q] = [v]
+            if split:
+                ctx.clear()
+            if ctx:
+                min_cost = math.inf
+                for k in range(i, j + 1):
+                    conflicts = 0
+                    for t in range(i, j):
+                        pk = pick(k, t)
+                        for v in ctx.get(pcs_n[t], ()):
+                            if v != pk:
+                                conflicts += 1
+                    cost[k - i] = cost[k - i] + conflicts * 1e6
+                    if cost[k - i] < min_cost:
+                        min_cost = cost[k - i]
         best_k, best_pref, best_warm = i, -math.inf, -math.inf
         for k in range(i, j + 1):
             ck = cost[k - i]
