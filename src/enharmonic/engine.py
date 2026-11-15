@@ -179,6 +179,13 @@ class EngineOptions:
     guard_raise_line: bool = False
     ornament_ms: float = 0
     vertical_pc_triad: bool = False
+    #: The vertical guard counts a misspelled third only inside a perfect triad that holds the note: by pitch class,
+    #: the note is the root, third or fifth of a sounding major or minor triad, and only that triad's members count
+    #: against it. A P5 elsewhere in the sonority does not make every dim4/aug2 a misspelled third: in the German
+    #: sixth D-F#-A-B# the B# belongs to no triad, so its aug2 with A is not read as a misspelled C. A note that would
+    #: be a triad's third while the triad's other third is sounding is that third's chromatic neighbour, not its
+    #: third: Ab struck against a ringing F-A-C (a legato A still held) is not counted as F minor's third.
+    vertical_own_triad: bool = False
     #: AUGMENTED SIXTH BY OUTWARD CONVERGENCE (look-ahead only): a note with an outward partner
     #: (:func:`enharmonic.outward_pairs`) whose meeting pitch is a key degree and whose rising tone is chromatic
     #: is spelled ten fifths from its partner (the rising tone sharp), dispositively.
@@ -212,11 +219,16 @@ class EngineOptions:
 
 #: REAL-TIME tier (``Speller()``).
 RT_PRESET = EngineOptions(
-    recency_guard=2, guard_window=3,
+    recency_guard=2, guard_window=7,
     fold="clamp", fold_center=3, fold_radius=7,
     side_weight=1, side_radius=6, anchor_window=32,
-    frame_mode="diatonic", vertical_weight=1, chromatic_sharp_lean=1, onset_revise=True,
+    frame_mode="diatonic", chromatic_sharp_lean=1, onset_revise=True,
     ornament_ms=80,
+    # A misspelled third inside a struck perfect triad weighs 2, so it overrules the sharp lean (in an Eb chord the
+    # pitch class 3 is Eb, not D#). The triad is read by pitch class and must hold the note (vertical_own_triad), so
+    # a chromatic neighbour beside a triad is not read as its misspelled third. The look-ahead tier's guard reading,
+    # with its recency-guard window of 7 onsets.
+    vertical_weight=2, vertical_pc_triad=True, vertical_own_triad=True,
     # A frame move to a seven-accidental collection lands on its twin with five or fewer (C# major -> Db major).
     # Real-time only: in look-ahead the inferred side key re-centres the fold and undoes it.
     frame_twin=True,
@@ -330,6 +342,7 @@ class SpellingEngine:
         self._guard_raise_line = o.guard_raise_line
         self._ornament_ms = o.ornament_ms
         self._vertical_pc_triad = o.vertical_pc_triad
+        self._vertical_own_triad = o.vertical_own_triad
         self._aug6_outward = o.aug6_outward
         self._aug6_passing_voice = o.aug6_passing_voice
         self._leading_tone_gate = o.leading_tone_gate
@@ -663,6 +676,24 @@ class SpellingEngine:
                     if v + 1 in vals:
                         in_perfect_triad = True
                         break
+            if self._vertical_own_triad:
+                # OWN TRIAD: only the members of a sounding major/minor triad that holds this note's pitch class count.
+                own = midi % 12
+                have = {m % 12 for m in active if m != self_midi}
+                have.add(own)
+                mates: set[int] = set()
+                for off in (0, 3, 4, 7):
+                    r = (own - off) % 12
+                    if r not in have or (r + 7) % 12 not in have:
+                        continue
+                    for third in (3, 4):
+                        if (r + third) % 12 not in have or (off != 0 and off != 7 and off != third):
+                            continue
+                        # The note as a third while the triad's other third is ringing is that third's neighbour.
+                        if off == third and (r + 7 - third) % 12 in have:
+                            continue
+                        mates.add(r); mates.add((r + third) % 12); mates.add((r + 7) % 12)
+                co_sounding = [v for m, v in active.items() if m != self_midi and m % 12 in mates]
 
         lean_target: Optional[int] = None
         if self._chromatic_sharp_lean > 0:

@@ -256,3 +256,45 @@ def test_minor_collection_holds_its_leading_tone():
     assert last3(Speller(look_ahead=True)) == "G F# G"
     assert last3(_EngineSpeller(SpellingEngine(replace(LA_PRESET, minor_leading_tone=False)))) == "G Gb G"
     assert not TP_PASS_PRESET.minor_leading_tone
+
+
+def _read_at_off(opts, ev, start):
+    # ev: (t, on, midi); each note is read at its note-off, as the parity bench reads it.
+    e = SpellingEngine(opts)
+    out = []
+    for t, on, m in sorted(ev, key=lambda x: (x[0], x[1])):
+        if on:
+            e.note_on(m, t)
+        else:
+            out.append(tok(e.get_spelling(m)))
+            e.note_off(m, t)
+    return " ".join(out[start:])
+
+
+def _scale(ms):
+    return [x for i, m in enumerate(ms) for x in ((i * 500, True, m), (i * 500 + 400, False, m))]
+
+
+def _chord(t, ms, dur=400):
+    return [(t, True, m) for m in ms] + [(t + dur, False, m) for m in ms]
+
+
+def test_struck_triad_weighs_two_in_real_time():
+    g_major, c_major, b_minor = [67, 69, 71, 72, 74, 76, 78, 79], [60, 62, 64, 65, 67, 69, 71, 72], [59, 61, 62, 64, 66, 67, 69, 71]
+    before = replace(RT_PRESET, vertical_weight=1, vertical_pc_triad=False, vertical_own_triad=False, guard_window=3)
+    # G major, then a struck Eb major triad: the triad overrules the sharp lean.
+    ev = _scale(g_major) + _chord(4000, [51, 55, 58])
+    assert _read_at_off(RT_PRESET, ev, 8) == "Eb G Bb"
+    assert _read_at_off(before, ev, 8) == "D# G A#"
+    ev = _scale(c_major) + _chord(4000, [53, 56, 60])
+    assert _read_at_off(RT_PRESET, ev, 8) == "F Ab C"
+    assert _read_at_off(before, ev, 8) == "F G# C"
+    # A chromatic neighbour beside a held B-D-F# is not its misspelled third.
+    ev = _scale(b_minor) + _chord(4000, [47, 59, 62, 66], 1500) + _chord(4500, [77]) + _chord(5000, [78])
+    assert _read_at_off(RT_PRESET, ev, 8).split()[:2] == ["E#", "F#"]
+    assert _read_at_off(replace(RT_PRESET, vertical_own_triad=False), ev, 8).split()[:2] == ["F", "F#"]
+    # A third whose triad already sounds the other third is its neighbour: G# against a ringing F-A-C.
+    ev = _scale(c_major) + _chord(4000, [53, 57, 60], 1500) + _chord(4500, [68]) + _chord(5000, [69])
+    assert _read_at_off(RT_PRESET, ev, 8).split()[:2] == ["G#", "A"]
+    assert _read_at_off(replace(RT_PRESET, vertical_own_triad=False), ev, 8).split()[:2] == ["Ab", "A"]
+    assert not LA_PRESET.vertical_own_triad and not TP_PASS_PRESET.vertical_own_triad
