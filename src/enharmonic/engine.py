@@ -304,6 +304,10 @@ class SpellingEngine:
             weights.append(w)
         self._weights = weights
         self._init_state()
+        # Key -> side state (kept across reset, as in TS): whether a side key has been seen, and the last one applied
+        # (NaN: the raw tie).
+        self._side_started = False
+        self._side_x: Optional[float] = None
 
     def _init_state(self) -> None:
         # Insertion-ordered dicts stand in for JS Map/Set (same iteration order, same "re-set keeps position").
@@ -1051,6 +1055,31 @@ class SpellingEngine:
     def set_key(self, key_tonic: int) -> None:
         """Re-centre the spiral clamp-fold basin on a supplied key (major tonic LoF) mid-stream."""
         self._fold_center = key_tonic + 2
+
+    def side_key(self, x: Optional[float]) -> None:
+        """KEY -> SIDE (look-ahead): call before each note-on with the note's side key (``side_key`` of
+        :meth:`enharmonic.Speller.note_on`, from :func:`enharmonic.side_keys`): the local key's relative-major tonic
+        on the line of fifths, NaN for the F#/Gb tie, None for none. The first call seeds the frame on that key when
+        no note has sounded yet (the ``key_tonic`` start; a tie seeds the sharp side). After that, a key that differs
+        from the last one re-centres the fold (:meth:`set_key`). A tie takes the side (F# or Gb major) nearer the
+        current surface's mean."""
+        if not self._side_started:
+            self._side_started = True
+            if x is not None:
+                kt = 6 if math.isnan(x) else x
+                self.set_key(kt)
+                if self._onset < 0:
+                    self.reset(collection_at(kt + 2))
+            self._side_x = x
+        if x is None:
+            return
+        if math.isnan(x):
+            sc = self.get_resolved_scale()
+            mean = sum(lof_of(p) for p in sc) / len(sc)
+            x = 6 if abs(6 + 2 - mean) <= abs(-6 + 2 - mean) else -6
+        if x != self._side_x:  # NaN != NaN, as in JS
+            self.set_key(x)
+            self._side_x = x
 
     def get_resolved_scale(self) -> list[PitchClass]:
         slots = list(self._scale)

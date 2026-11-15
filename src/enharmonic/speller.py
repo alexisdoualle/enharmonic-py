@@ -11,11 +11,14 @@ For offline use with the whole piece in hand, see :func:`enharmonic.spell_two_pa
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from .engine import LA_PRESET, RT_PRESET, SpellingEngine, collection_at, with_onset_tolerance
 from .key import LocalKey
 from .pitch import Pitch, PitchClass
+
+#: ``side_key`` not given (TS ``ctx.sideKey === undefined``); None is a side key of its own (no key read yet).
+NO_SIDE_KEY: Any = object()
 
 
 class Speller:
@@ -41,14 +44,20 @@ class Speller:
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
                 outward_partner: Optional[int] = None, outward_role: int = 0,
-                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None) -> None:
+                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None,
+                side_key: Any = NO_SIDE_KEY) -> None:
         """``outward_partner`` / ``outward_role``: the aug6 context (partner midi, +1 rising / -1 falling) from
         :func:`enharmonic.outward_pairs`; look-ahead only, omit to switch the aug6 rule off. ``local_key``: the
         key around the note (:func:`enharmonic.local_keys`) for the leading-tone gate; look-ahead only, omit to
         switch the gate off. ``degree_key``: the key-degree gate's key (:func:`enharmonic.degree_keys`: the
         tonic-triad table on +-12 notes centred on the note); a semitone resolution into a pitch outside it keeps
         the note's letter instead of the look-ahead's letter step. Look-ahead only, omit to switch the gate
-        off."""
+        off. ``side_key``: key -> side, the conventional side of the local key as its relative major's tonic on the
+        line of fifths (:func:`enharmonic.side_keys`; NaN = the F#/Gb tie, None = none read yet). The speller
+        re-centres its fold on it (as :meth:`set_key`) whenever it changes; on the very first note it also seeds the
+        frame there. Look-ahead mode; omit it to switch key -> side off."""
+        if side_key is not NO_SIDE_KEY:
+            self._engine.side_key(side_key)
         self._engine.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role, local_key, degree_key)
 
     def note_off(self, midi: int, t: Optional[float] = None) -> None:

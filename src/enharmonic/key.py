@@ -82,17 +82,22 @@ def _centre(y: Sequence[float]) -> tuple[list[float], float]:
 _CENTRED = {k: tuple(_centre(m) for m in modes) for k, modes in _TABLES.items()}
 
 
-def _best_key(h: tuple[int, ...], table: str) -> Optional[LocalKey]:
+def _best_key(h: Sequence[int], table: str) -> Optional[LocalKey]:
     """The best key of a 12-bin pitch-class COUNT histogram (Pearson correlation with each mode's template, the
     histogram rotated to each tonic; 0 when flat), or None if empty. Ties go to the first key in the order
     C major, C minor, C# major, ..., B minor. Every float sum runs in the TypeScript order (i = 0..11)."""
+    return best_key_centred(h, _CENTRED[table])
+
+
+def best_key_centred(h: Sequence[int], centred: Sequence[tuple[list[float], float]]) -> Optional[LocalKey]:
+    """:func:`_best_key` for a centred table (``_centre`` of the major and minor templates)."""
     tot = 0
     for v in h:
         tot += v
     if not tot:
         return None
     mx = tot / 12
-    (y0, d0), (y1, d1) = _CENTRED[table]
+    (y0, d0), (y1, d1) = centred
     xs = [v - mx for v in h]
     tonic, minor, br = -1, False, -math.inf
     for t in range(12):
@@ -116,10 +121,12 @@ def _best_key(h: tuple[int, ...], table: str) -> Optional[LocalKey]:
 #: Per pitch class, its contribution to every key's correlation numerator, scaled by the mode's 1/sqrt(dy): row[k]
 #: for key k = 2 * tonic + minor is yc_m[(pc - tonic) % 12] / sqrt(dy_m). A window's sum of rows ranks the 24 keys
 #: as its correlations do (up to the positive factor 1/sqrt(dx) and rounding), for the fast path below.
-_ROWS = {
-    tb: [[m[0][(pc - t) % 12] / math.sqrt(m[1]) for t in range(12) for m in modes] for pc in range(12)]
-    for tb, modes in _CENTRED.items()
-}
+def score_rows(modes: Sequence[tuple[list[float], float]]) -> list[list[float]]:
+    """Per pitch class, its contribution to every key's correlation numerator (see ``_ROWS``)."""
+    return [[m[0][(pc - t) % 12] / math.sqrt(m[1]) for t in range(12) for m in modes] for pc in range(12)]
+
+
+_ROWS = {tb: score_rows(modes) for tb, modes in _CENTRED.items()}
 #: The fast path decides only when the best key's correlation beats the runner-up by more than this; otherwise
 #: (a near or exact tie) the exact computation, in the TypeScript order, decides. Rounding is ~1e-12 at most.
 _MARGIN = 1e-7

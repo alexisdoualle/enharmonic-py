@@ -20,6 +20,7 @@ from typing import Any, Iterable, Literal, Optional, Protocol, Sequence
 
 from .aug6 import outward_pairs
 from .key import LocalKey, degree_keys, local_keys
+from .key_side import side_keys
 from .core import CoreSpeller
 from .kernel import resolve_exact_step, resolve_step
 from .lof import spelling_of
@@ -36,7 +37,7 @@ class StreamingSpeller(Protocol):
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
                 outward_partner: Optional[int] = None, outward_role: int = 0,
-                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None) -> None: ...
+                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None, **ctx: Any) -> None: ...
     def note_off(self, midi: int, t: Optional[float] = None) -> None: ...
     def get_lof(self, midi: int) -> Optional[int]: ...
 
@@ -77,6 +78,7 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
     pairs = outward_pairs(notes) if la else None
     keys = local_keys(notes) if la else None
     deg_keys = degree_keys(notes) if la else None
+    sides = side_keys(notes) if la else None
     on_idx = 0
     for i in range(n_ev):
         t, typ, midi = events[i]
@@ -101,12 +103,12 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
             y = pairs.partner[on_idx] if pairs is not None else -1
             k = keys[on_idx] if keys is not None else None
             dk = deg_keys[on_idx] if deg_keys is not None else None
-            if y >= 0:
-                s.note_on(midi, t, d, exact, notes[y].midi, pairs.role[on_idx], k, dk)  # type: ignore[union-attr]
-            elif k is not None or dk is not None:
-                s.note_on(midi, t, d, exact, None, 0, k, dk)
-            else:
+            if not la:
                 s.note_on(midi, t, d, exact)
+            else:
+                s.note_on(midi, t, d, exact, notes[y].midi if y >= 0 else None,
+                          pairs.role[on_idx] if y >= 0 else 0, k, dk,  # type: ignore[union-attr]
+                          side_key=sides[on_idx])  # type: ignore[index]
             on_idx += 1
             pending.setdefault(midi, []).append(len(out))
             out.append(None)
@@ -186,6 +188,7 @@ def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahea
     pairs = outward_pairs(notes) if look_ahead else None
     keys = local_keys(notes) if look_ahead else None
     deg_keys = degree_keys(notes) if look_ahead else None
+    sides = side_keys(notes) if look_ahead else None
     evs: list[tuple[float, bool, int, int]] = []
     for i, x in enumerate(notes):
         evs.append((x.t_on, True, x.midi, i))
@@ -200,12 +203,12 @@ def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahea
             y = pairs.partner[i] if pairs is not None else -1
             k = keys[i] if keys is not None else None
             dk = deg_keys[i] if deg_keys is not None else None
-            if y >= 0:
-                s.note_on(midi, t, d, x, notes[y].midi, pairs.role[i], k, dk)  # type: ignore[union-attr]
-            elif k is not None or dk is not None:
-                s.note_on(midi, t, d, x, None, 0, k, dk)
-            else:
+            if not look_ahead:
                 s.note_on(midi, t, d, x)
+            else:
+                s.note_on(midi, t, d, x, notes[y].midi if y >= 0 else None,
+                          pairs.role[i] if y >= 0 else 0, k, dk,  # type: ignore[union-attr]
+                          side_key=sides[i])  # type: ignore[index]
             pend.setdefault(midi, []).append(i)
         else:
             q = pend.get(midi)
