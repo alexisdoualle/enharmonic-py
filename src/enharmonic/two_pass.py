@@ -100,6 +100,13 @@ class TwoPassOptions:
     #: Sonata 2/ii (Eb minor, six flats): the signature settles the F#/Gb tie and m114-179 keep Chopin's Db, Cb, Gb.
     #: Inert without ``key_signatures`` or when ``key_side`` is off.
     key_signature_anchor: bool = True
+    #: A SHORT RESPELLED SECTION TAKES THE SURROUNDING SIDE. A composer respells a passage for a section, never for a
+    #: few beats: in the merge, a disagreement region of at most 32 onsets and at least 3 pitch classes, whose merged
+    #: spelling contradicts the spelling of the same pitch classes just before and just after it (the two contexts
+    #: agreeing with each other), takes whole the pass whose spelling the surroundings use, when that pass contradicts
+    #: them less than the merge does. Counter-case: a composer's own short respell is undone too (Chopin Barcarolle
+    #: m23-24).
+    short_flip: bool = True
 
 
 @dataclass(frozen=True)
@@ -159,6 +166,9 @@ def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list
 
 #: ``triangle_free_context``: notes read on each side of a disagreement run for the context spellings.
 _CONTEXT_NOTES = 32
+#: ``short_flip``: the longest region (in onsets) that counts as short (the scorer's flip window is +-16 onsets, so a
+#: respell shorter than 32 onsets is never a section), and the fewest pitch classes it must hold.
+_SHORT_FLIP_MAX_ONSETS, _SHORT_FLIP_MIN_PCS = 32, 3
 #: ``key_side``: the most accidentals a key signature may have and still choose the side.
 _KEY_SIDE_MAX_ACCIDENTALS = 5
 
@@ -481,6 +491,57 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     tri_free: Optional[list[bool]] = (
         [not has_triad(sounding[t]) and (len(sounding[t]) >= 2 or dim7_note(t)) for t in range(n)]
         if opts.triangle_free_context else None)
+    # A SHORT RESPELLED SECTION TAKES THE SURROUNDING SIDE (see short_flip). Reads the context before [i, j) in the
+    # merge and after it in the agreeing notes (the first spelling of each pitch class within _CONTEXT_NOTES notes);
+    # if no pitch class is spelled differently before and after, and the region is short and holds enough pitch
+    # classes, the pass that contradicts the context less replaces the merge when the merge contradicts it more.
+    def short_flip_repair(i: int, j: int) -> None:
+        before: dict[int, int] = {}
+        t, c = i - 1, 0
+        while t >= 0 and c < _CONTEXT_NOTES:
+            if out[t] is not None:
+                c += 1
+                before.setdefault(pcs_n[t], out[t])  # type: ignore[arg-type]
+            t -= 1
+        after: dict[int, Optional[int]] = {}
+        t, c = j, 0
+        while t < n and c < _CONTEXT_NOTES:
+            if agree_arr[t]:
+                c += 1
+                if pcs_n[t] not in after:
+                    after[pcs_n[t]] = fwd[t]
+            t += 1
+        for q, v in after.items():
+            b = before.get(q)
+            if b is not None and b != v:
+                return
+        onsets = 0
+        pcs_r: set[int] = set()
+        for t in range(i, j):
+            pcs_r.add(pcs_n[t])
+            if t == i or N[t].t_on != N[t - 1].t_on:
+                onsets += 1
+        if onsets > _SHORT_FLIP_MAX_ONSETS or len(pcs_r) < _SHORT_FLIP_MIN_PCS:
+            return
+
+        def conflicts(sp: Sequence[Optional[int]]) -> int:
+            c = 0
+            for t in range(i, j):
+                v = sp[t]
+                b = before.get(pcs_n[t])
+                a = after.get(pcs_n[t])
+                if b is not None and b != v:
+                    c += 1
+                if a is not None and a != v:
+                    c += 1
+            return c
+
+        c_f, c_b, c_o = conflicts(fwd), conflicts(bwd), conflicts(out)
+        pas = fwd if c_f <= c_b else bwd
+        if c_o > min(c_f, c_b):
+            for t in range(i, j):
+                out[t] = pas[t]
+
     runs = _run_pairs(N) if opts.run_boundary else []
     run_at = 0  # runs[] sorted by first strike; disagreement runs only move forward
     i = max(0, first_agree)
@@ -591,6 +652,8 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
                 best_k, best_pref, best_warm = k, pref, warm
         for t in range(i, j):
             out[t] = fwd[t] if t < best_k else bwd[t]
+        if opts.short_flip:
+            short_flip_repair(i, j)
         i = j
 
     # A STRUCK TRIAD SPELLS ITS THIRD MEMBER (see struck_triad_third); all repairs read the merge, then apply.
