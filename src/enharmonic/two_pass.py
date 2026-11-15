@@ -77,6 +77,14 @@ class TwoPassOptions:
     #: deepened key) is written either way and cannot choose: the pass counts from C there. Clair de lune m44-47
     #: (Db major): the passes keep Debussy's Gb, Db, Eb, Ab instead of F#, C#, D#, G#.
     key_side: bool = True
+    #: A STRUCK TRIAD SPELLS ITS THIRD MEMBER. After the merge, where the three pitch classes of a major or minor triad
+    #: are attacked together at a note's onset and the other two members are spelled coherently with each other (one
+    #: spelling each), a note a comma off the triad (a diminished fourth or augmented second inside it) takes the
+    #: spelling that completes it, but only toward the local merged centre (median of the +-16 notes around it), and
+    #: not when the note is a third that moves a semitone onto the other third of the same root (an appoggiatura:
+    #: G#->A over F-C). One shot: nothing it writes feeds another decision. Mozart K. 459/iii, F minor, Ab-C-F struck
+    #: together: the merge wrote G#, the rule writes Mozart's Ab.
+    struck_triad_third: bool = True
 
 
 @dataclass(frozen=True)
@@ -138,6 +146,87 @@ def _resolve_dirs_exact(notes: Sequence[TwoPassNote], horizon: int = 16) -> list
 _CONTEXT_NOTES = 32
 #: ``key_side``: the most accidentals a key signature may have and still choose the side.
 _KEY_SIDE_MAX_ACCIDENTALS = 5
+
+
+#: ``struck_triad_third``: notes read on each side for the co-sounding members, the merged centre, and onsets scanned
+#: for an appoggiatura's resolution.
+_TRIAD_SCAN, _TRIAD_CENTRE_RADIUS, _TRIAD_APP_ONSETS = 64, 16, 8
+#: ``struck_triad_third``: major and minor triads as (semitones, fifths) above the root.
+_TRIADS = (((0, 0), (4, 4), (7, 1)), ((0, 0), (3, -3), (7, 1)))
+
+
+def _struck_triad_repairs(N: Sequence[TwoPassNote], out: Sequence[Optional[int]],
+                          sounding: Sequence[set[int]]) -> list[tuple[int, int]]:
+    """``struck_triad_third``: the (note, spelling) repairs over the merged spellings ``out`` (sorted order)."""
+    n = len(N)
+    pcs = [x.midi % 12 for x in N]
+    fix: list[tuple[int, int]] = []
+    for t in range(n):
+        o = out[t]
+        if o is None:
+            continue
+        pc, S = pcs[t], sounding[t]
+        lo, hi = max(0, t - _TRIAD_SCAN), min(n, t + _TRIAD_SCAN)
+        ton, toff = N[t].t_on, N[t].t_off
+        # The spellings of each pitch class among the notes overlapping this one (insertion-ordered, like a JS Set).
+        co: dict[int, dict[int, None]] = {}
+        for k in range(lo, hi):
+            if k == t or out[k] is None or not (N[k].t_on < toff and N[k].t_off > ton):
+                continue
+            co.setdefault(pcs[k], {})[out[k]] = None  # type: ignore[index]
+
+        def struck(q: int) -> bool:
+            for k in range(lo, hi):
+                if k != t and N[k].t_on == ton and pcs[k] == q:
+                    return True
+            return False
+
+        want: Optional[int] = None
+        clash = False
+        for tpl in _TRIADS:
+            for ms, mf in tpl:
+                r = (pc - ms + 12) % 12
+                others = [(s2, f2) for s2, f2 in tpl if s2 != ms]
+                if not all((r + s2) % 12 in S and len(co.get((r + s2) % 12, ())) == 1 for s2, _ in others):
+                    continue
+                if not all(struck((r + s2) % 12) for s2, _ in others):
+                    continue
+                # An appoggiatura: a third moving a semitone onto the OTHER third of the same root (G#->A over F-C).
+                if ms == 3 or ms == 4:
+                    alt = (r + (4 if ms == 3 else 3)) % 12
+                    dm = 1 if ms == 3 else -1
+                    seen = 0
+                    last_on = ton
+                    hit = False
+                    k = t + 1
+                    while k < n and seen < _TRIAD_APP_ONSETS:
+                        if N[k].t_on != last_on:
+                            seen += 1
+                            last_on = N[k].t_on
+                        if N[k].t_on > ton and N[k].midi == N[t].midi + dm and pcs[k] == alt:
+                            hit = True
+                            break
+                        k += 1
+                    if hit:
+                        continue
+                roots = [next(iter(co[(r + s2) % 12])) - f2 for s2, f2 in others]
+                if roots[0] != roots[1]:  # the other two members are not coherent
+                    continue
+                w = roots[0] + mf
+                if want is not None and want != w:
+                    clash = True
+                else:
+                    want = w
+        if clash or want is None or want == o or abs(want - o) != 12:
+            continue
+        # Only toward the local merged centre.
+        loc = sorted(out[k] for k in range(max(0, t - _TRIAD_CENTRE_RADIUS), min(n - 1, t + _TRIAD_CENTRE_RADIUS) + 1)
+                     if k != t and out[k] is not None)  # type: ignore[type-var]
+        cen = loc[len(loc) >> 1] if loc else 0
+        if abs(want - cen) >= abs(o - cen):
+            continue
+        fix.append((t, want))
+    return fix
 
 
 def _side_signatures(notes: Sequence[TwoPassNote]) -> list[Optional[float]]:
@@ -469,6 +558,11 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
         for t in range(i, j):
             out[t] = fwd[t] if t < best_k else bwd[t]
         i = j
+
+    # A STRUCK TRIAD SPELLS ITS THIRD MEMBER (see struck_triad_third); all repairs read the merge, then apply.
+    if opts.struck_triad_third:
+        for t, w in _struck_triad_repairs(N, out, sounding):
+            out[t] = w
 
     if opts.honor_resolution:
         dirs_x = _resolve_dirs_exact(N)
