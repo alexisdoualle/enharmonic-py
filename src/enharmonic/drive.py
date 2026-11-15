@@ -3,11 +3,12 @@
 Not part of the TypeScript package's public API; these mirror prod's evaluation harness so the Python
 port can be checked note for note:
 
-- :func:`drive` mirrors ``test/eval/fixtures.ts`` ``drive()`` (event stream; look-ahead from the next
-  ``horizon`` on-events; read-back at note-off).
+- :func:`drive` mirrors ``test/eval/fixtures.ts`` ``drive()`` (event stream; read-back at note-off; in
+  look-ahead, every context prod's harness feeds: resolution directions from :func:`enharmonic.resolution_dirs`
+  (the next ``horizon`` notes, then the note's own voice), aug6 pairs, local / degree / side keys, dominants).
 - :func:`on_notes` mirrors ``onNotes()`` (event stream -> two-pass notes).
 - :func:`drive_notes` mirrors ``test/eval/meredith.ts`` ``predict()`` for the streaming modes (a note
-  list; look-ahead from the next 16 NOTES in bass-first order; releases before strikes at equal t).
+  list in bass-first order, the same look-ahead context; releases before strikes at equal t).
 - :func:`spell_events` mirrors ``predict()`` in fixtures.ts: one call for any mode.
 
 An event is ``(t, type, midi)`` with ``type`` ``'on'`` or ``'off'``, or a dict with ``t`` (or ``t_ms``),
@@ -22,12 +23,12 @@ from .aug6 import outward_pairs
 from .key import LocalKey, degree_keys, local_keys
 from .dominant import dominant_chords
 from .key_side import side_keys
+from .resolution import resolution_dirs
 from .core import CoreSpeller
-from .kernel import resolve_exact_step, resolve_step
 from .lof import spelling_of
 from .pitch import Pitch
 from .speller import Speller
-from .two_pass import TwoPassNote, _next_step, spell_two_pass_lof
+from .two_pass import TwoPassNote, spell_two_pass_lof
 
 Mode = Literal["core", "rt", "la", "tp"]
 Event = tuple[float, str, int]
@@ -72,7 +73,6 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
     out: list[Optional[int]] = []
     pending: dict[int, list[int]] = {}
     la = bool(getattr(s, "look_ahead", False))
-    n_ev = len(events)
     # Look-ahead also gets each note's aug6 outward partner, its local key and its key-degree key (fixtures.ts
     # drive).
     notes = on_notes(events) if la else []
@@ -81,27 +81,13 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
     deg_keys = degree_keys(notes) if la else None
     sides = side_keys(notes) if la else None
     doms = dominant_chords(notes) if la else None
+    rd = resolution_dirs(notes, window=horizon) if la else None
     on_idx = 0
-    for i in range(n_ev):
+    for i in range(len(events)):
         t, typ, midi = events[i]
         if typ == "on":
-            d = 0
-            exact = 0
-            seen = 0
-            if la:
-                j = i + 1
-                while j < n_ev and seen < horizon:
-                    ft, ftyp, fmidi = events[j]
-                    j += 1
-                    if ftyp != "on":
-                        continue
-                    seen += 1
-                    if d == 0:
-                        d = resolve_step(midi, fmidi)
-                    if exact == 0:
-                        exact = resolve_exact_step(midi, fmidi)
-                    if d != 0 and exact != 0:
-                        break
+            d = rd.dir[on_idx] if rd is not None else 0
+            exact = rd.exact[on_idx] if rd is not None else 0
             y = pairs.partner[on_idx] if pairs is not None else -1
             k = keys[on_idx] if keys is not None else None
             dk = deg_keys[on_idx] if deg_keys is not None else None
@@ -173,20 +159,11 @@ def spell_events(events: Iterable[Any], mode: Mode = "la") -> list[Optional[Pitc
 # ── note-list driver (meredith.ts) ─────────────────────────────────────────────
 
 
-def resolve_dirs_notes(midis: Sequence[int], exact: bool = False, horizon: int = 16) -> list[int]:
-    """meredith.ts ``resolveDirs``: nearest semitone step among the next ``horizon`` notes."""
-    ms = list(midis)
-    if exact:
-        return _next_step(ms, [m + 1 for m in ms], [m - 1 for m in ms], horizon)
-    pcs = [m % 12 for m in ms]
-    return _next_step(pcs, [(p + 1) % 12 for p in pcs], [(p + 11) % 12 for p in pcs], horizon)
-
-
 def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahead: bool) -> list[Optional[int]]:
     """meredith.ts ``predict`` for a streaming speller. ``notes`` must be sorted bass-first."""
-    midis = [x.midi for x in notes]
-    dirs = resolve_dirs_notes(midis) if look_ahead else None
-    exact = resolve_dirs_notes(midis, True) if look_ahead else None
+    rd = resolution_dirs(notes) if look_ahead else None
+    dirs = rd.dir if rd is not None else None
+    exact = rd.exact if rd is not None else None
     pairs = outward_pairs(notes) if look_ahead else None
     keys = local_keys(notes) if look_ahead else None
     deg_keys = degree_keys(notes) if look_ahead else None

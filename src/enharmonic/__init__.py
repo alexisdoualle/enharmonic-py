@@ -10,6 +10,7 @@ A faithful port of the TypeScript ``enharmonic`` library; ``parity/`` checks it 
 from .aug6 import OutwardPairs, outward_pairs
 from .key import LocalKey, degree_keys, local_keys
 from .key_side import side_keys
+from .resolution import RESOLUTION_MAX, RESOLUTION_WINDOW, ResolutionDirs, resolution_dirs
 from .dominant import DOMINANT_REACH, DominantChord, dominant_chords
 from .candidates import enharmonic_candidates_for
 from .core import CoreSpeller
@@ -27,6 +28,7 @@ __all__ = [
     "drive", "on_notes", "spell_events", "resolve_step", "resolve_exact_step", "outward_pairs", "OutwardPairs",
     "local_keys", "degree_keys", "LocalKey", "side_keys",
     "dominant_chords", "DominantChord", "DOMINANT_REACH",
+    "resolution_dirs", "ResolutionDirs", "RESOLUTION_WINDOW", "RESOLUTION_MAX",
     "Pitch", "PitchClass", "midi_of", "pitch_class_value", "pitch_to_string",
     "Interval", "interval_between", "interval_label", "enharmonic_candidates_for",
 ]

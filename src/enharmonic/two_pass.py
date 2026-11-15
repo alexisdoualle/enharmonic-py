@@ -20,6 +20,7 @@ from .key import LocalKey, degree_keys, local_keys
 from .engine import TP_PASS_PRESET, Decision, SpellingEngine, with_onset_tolerance
 from .lof import spelling_of
 from .pitch import PitchClass
+from .resolution import _next_step
 
 
 class TwoPassNote(NamedTuple):
@@ -111,23 +112,6 @@ def _num(v: Optional[float]) -> float:
 
 
 # ── Direction helpers ─────────────────────────────────────────────────────────
-
-
-def _next_step(keys: list[int], up: list[int], down: list[int], horizon: int) -> list[int]:
-    """For each a, +1 if the first b in (a, a + horizon] with keys[b] == up[a] or down[a] matches ``up``,
-    -1 if it matches ``down``, 0 if there is none: the forward scan of the TS ``resolveDirs``, computed in
-    one backward sweep with the next index of every key (the scan's first hit is the nearer of the two)."""
-    n = len(keys)
-    d = [0] * n
-    nxt: dict[int, int] = {}
-    for a in range(n - 1, -1, -1):
-        bu = nxt.get(up[a], n)
-        bd = nxt.get(down[a], n)
-        b = bu if bu < bd else bd
-        if b < n and b - a <= horizon:
-            d[a] = 1 if b == bu else -1
-        nxt[keys[a]] = a
-    return d
 
 
 def _resolve_dirs(notes: Sequence[TwoPassNote], horizon: int = 16) -> list[int]:
