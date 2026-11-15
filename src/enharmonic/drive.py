@@ -20,6 +20,7 @@ from typing import Any, Iterable, Literal, Optional, Protocol, Sequence
 
 from .aug6 import outward_pairs
 from .key import LocalKey, degree_keys, local_keys
+from .dominant import dominant_chords
 from .key_side import side_keys
 from .core import CoreSpeller
 from .kernel import resolve_exact_step, resolve_step
@@ -79,6 +80,7 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
     keys = local_keys(notes) if la else None
     deg_keys = degree_keys(notes) if la else None
     sides = side_keys(notes) if la else None
+    doms = dominant_chords(notes) if la else None
     on_idx = 0
     for i in range(n_ev):
         t, typ, midi = events[i]
@@ -108,7 +110,7 @@ def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -
             else:
                 s.note_on(midi, t, d, exact, notes[y].midi if y >= 0 else None,
                           pairs.role[on_idx] if y >= 0 else 0, k, dk,  # type: ignore[union-attr]
-                          side_key=sides[on_idx])  # type: ignore[index]
+                          side_key=sides[on_idx], dominant=doms[on_idx])  # type: ignore[index]
             on_idx += 1
             pending.setdefault(midi, []).append(len(out))
             out.append(None)
@@ -189,6 +191,7 @@ def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahea
     keys = local_keys(notes) if look_ahead else None
     deg_keys = degree_keys(notes) if look_ahead else None
     sides = side_keys(notes) if look_ahead else None
+    doms = dominant_chords(notes) if look_ahead else None
     evs: list[tuple[float, bool, int, int]] = []
     for i, x in enumerate(notes):
         evs.append((x.t_on, True, x.midi, i))
@@ -208,7 +211,7 @@ def drive_notes_lof(s: StreamingSpeller, notes: Sequence[TwoPassNote], look_ahea
             else:
                 s.note_on(midi, t, d, x, notes[y].midi if y >= 0 else None,
                           pairs.role[i] if y >= 0 else 0, k, dk,  # type: ignore[union-attr]
-                          side_key=sides[i])  # type: ignore[index]
+                          side_key=sides[i], dominant=doms[i])  # type: ignore[index]
             pend.setdefault(midi, []).append(i)
         else:
             q = pend.get(midi)

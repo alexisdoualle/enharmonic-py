@@ -20,6 +20,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Iterable, Literal, Optional
 
+from .dominant import DominantChord
 from .key import LocalKey, is_key_degree, is_leading_tone, is_wide_leading_tone
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass
@@ -318,6 +319,7 @@ class SpellingEngine:
         self._cur_onset_outward: dict[int, tuple[int, int]] = {}  # midi -> (partner midi, role)
         self._cur_onset_key: dict[int, LocalKey] = {}  # midi -> local key (the leading-tone gate's)
         self._cur_onset_degree_key: dict[int, LocalKey] = {}  # midi -> the key-degree gate's key
+        self._cur_onset_dominant: dict[int, DominantChord] = {}  # midi -> its onset's dominant (tendency tones)
         # aug6_passing_voice: pairs judged one passing voice, (rising midi, falling midi), until either is released.
         self._dead_pairs: set[tuple[int, int]] = set()
         self._guard_before: list[Optional[tuple[int, int]]] = [None] * 7
@@ -362,7 +364,8 @@ class SpellingEngine:
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
                 outward_partner: Optional[int] = None, outward_role: int = 0,
-                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None) -> None:
+                local_key: Optional[LocalKey] = None, degree_key: Optional[LocalKey] = None,
+                dominant: Optional[DominantChord] = None) -> None:
         tol = self._onset_tolerance
         if t is None:
             new_onset = True
@@ -380,6 +383,7 @@ class SpellingEngine:
             self._cur_onset_outward.clear()
             self._cur_onset_key.clear()
             self._cur_onset_degree_key.clear()
+            self._cur_onset_dominant.clear()
             if self._onset_revise:
                 self._guard_before = list(self._last_by_letter)
             if self._cur_onset_pcs:
@@ -433,6 +437,10 @@ class SpellingEngine:
             self._cur_onset_degree_key[midi] = degree_key
         else:
             self._cur_onset_degree_key.pop(midi, None)
+        if dominant is not None:
+            self._cur_onset_dominant[midi] = dominant
+        else:
+            self._cur_onset_dominant.pop(midi, None)
 
         if self._pending and t is not None:
             for m, p in list(self._pending.items()):
@@ -638,10 +646,50 @@ class SpellingEngine:
             if s > best_score:
                 best_score = s
                 best = n
+        # DOMINANT NAMES ITS TENDENCY TONES: dispositive over every score (the look-ahead vote included), below the
+        # aug6 outward rule.
+        if self._look_ahead_on and not outward_is_candidate and self._cur_onset_dominant:
+            named = self._dominant_spelling(midi, self_midi)
+            if named is not None:
+                best = named
         # AUG6 OUTWARD: dispositive, above every score.
         if outward_is_candidate:
             best = outward
         return best, rows
+
+    def _dominant_spelling(self, midi: int, self_midi: Optional[int]) -> Optional[int]:
+        """The tendency-tone rule's spelling for ``midi``, or None when it does not apply. The note must be the third
+        or the seventh of its onset's dominant. The root is named from the committed spellings of the chord's
+        sounding root and fifth (majority; on a tie or with none sounding, from the frame surface), never from the
+        tones being named. The rule stays inside the leash deadzone (``side_radius`` fifths from the collection
+        centre): a farther name means the root was read on the far side, and the summed scores decide instead."""
+        v = self._cur_onset_dominant.get(midi)
+        if v is None:
+            return None
+        off = v.offs.get(midi % 12)
+        if off != 4 and off != -2:
+            return None
+        votes: dict[int, int] = {}
+        for m, x in self._active.items():
+            if m == midi or m == self_midi:
+                continue
+            o = v.offs.get(m % 12)
+            if o == 0 or o == 1:
+                votes[x - o] = votes.get(x - o, 0) + 1  # type: ignore[operator]
+        # Stable sort by count, descending: only a unique maximum names the root.
+        ranked = sorted(votes.items(), key=lambda p: -p[1])
+        if ranked and not (len(ranked) > 1 and ranked[0][1] == ranked[1][1]):
+            root = ranked[0][0]
+        else:
+            s = next((x for x in LETTER_ORDER if pitch_class(self._scale[x]) == v.root), None)
+            if s is None:
+                return None
+            root = self._scale[s]
+        named = root + off
+        if named not in candidates(midi):
+            return None
+        centre = self._frame_centre if self._frame_mode == "diatonic" else self._surface_collection_centre()
+        return None if abs(named - centre) > self._side_radius else named
 
     def _outward_spelling(self, midi: int) -> Optional[int]:
         """The aug6 outward rule's spelling for ``midi``, or None: the pair's partner must be committed and
