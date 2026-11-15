@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-from .engine import LA_PRESET, RT_PRESET, SpellingEngine, collection_at, with_onset_tolerance
+from .engine import LA_PRESET, RT_PRESET, SpellingEngine, with_onset_tolerance
 from .dominant import DominantChord
 from .key import LocalKey
 from .pitch import Pitch, PitchClass
@@ -28,20 +28,26 @@ class Speller:
         :param look_ahead: letter-aware look-ahead; pass ``resolve_dir`` / ``resolve_exact`` to
             :meth:`note_on` from a small forward buffer (see :func:`enharmonic.drive`).
         :param key_tonic: PROTOTYPE key hint, the signed line-of-fifths of the MAJOR tonic (C=0, G=1, F=-1,
-            Db=-5; minor: its relative major). Re-centres the fold basin and seeds the opening frame.
+            Db=-5; minor: its relative major). The signature names the opening collection (see :meth:`set_key`).
         :param onset_tolerance: group notes that start within this many ``t`` units of an onset's first note
             into that onset, unless the pitch repeats. Default 0 (exact ``t`` grouping).
         """
         self.look_ahead = look_ahead
         preset = LA_PRESET if look_ahead else RT_PRESET
         self._engine = SpellingEngine(with_onset_tolerance(preset, onset_tolerance) if onset_tolerance else preset)
+        # An initial key is set_key at t=0: the signature names the opening collection (see set_key).
         if key_tonic is not None:
-            self._engine.set_key(key_tonic)
-            self._engine.reset(collection_at(key_tonic + 2))
+            self._engine.key_signature(key_tonic)
 
-    def set_key(self, key_tonic: int) -> None:
-        """Re-centre the spiral fold basin on a new key mid-stream, without clearing the running frame."""
-        self._engine.set_key(key_tonic)
+    def set_key(self, key_tonic: float) -> None:
+        """Change the key mid-stream: call between notes at each notated key-signature change. The new signature names
+        the collection until the music contradicts it: the next notes are spelled in it (a Db triad right after a
+        change from C major to Db major is Db-F-Ab), the notes before the change no longer count as evidence against
+        it, and the frame leaves it only when later notes out-cover it. The spiral fold basin is re-centred on the
+        key. Sounding notes and the voice memory are kept; restating the current key changes nothing. ``key_tonic``
+        = signed line-of-fifths of the MAJOR tonic (minor: its relative major). For a hard boundary that should also
+        forget the voices, construct a new Speller."""
+        self._engine.key_signature(key_tonic)
 
     def note_on(self, midi: int, t: Optional[float] = None, resolve_dir: int = 0, resolve_exact: int = 0,
                 outward_partner: Optional[int] = None, outward_role: int = 0,

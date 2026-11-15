@@ -22,6 +22,7 @@ from typing import Iterable, Literal, Optional
 
 from .dominant import DominantChord
 from .key import LocalKey, is_key_degree, is_leading_tone, is_wide_leading_tone
+from ._js import js_round
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass
 from .scoring import CONSONANCE_BY_DISTANCE
@@ -330,6 +331,9 @@ class SpellingEngine:
         # The key signature the ECONOMY fold counts accidentals from: its relative-major tonic on the line of fifths
         # (0 = C, the default count). Set per note by the two-pass tier (set_signature).
         self._signature: float = 0
+        # The supplied key signature (key_signature), None for none; a supplied one outranks the first inferred side
+        # key.
+        self._signed_key: Optional[float] = None
 
     def _init_state(self) -> None:
         # Insertion-ordered dicts stand in for JS Map/Set (same iteration order, same "re-set keeps position").
@@ -1131,6 +1135,40 @@ class SpellingEngine:
         """Re-centre the spiral clamp-fold basin on a supplied key (major tonic LoF) mid-stream."""
         self._fold_center = key_tonic + 2
 
+    def key_signature(self, key_tonic: float) -> None:
+        """A supplied KEY SIGNATURE (the Speller's ``key_tonic`` and ``set_key``): the signature names the collection
+        until the music contradicts it. Re-centres the fold basin as :meth:`set_key` does and, in the diatonic frame,
+        makes the signature's collection the held frame: the notes heard before it are not evidence against it, so
+        the frame's raw-pc evidence restarts from the signature, and the frame leaves it only when the notes after it
+        out-cover it. Alterations held over the old collection are pulled back; sounding notes keep their committed
+        spelling, and the voice memory is kept. Under the mean frame it seeds the slots before the first note and is
+        otherwise :meth:`set_key`. Restating the current signature changes nothing."""
+        self.set_key(key_tonic)
+        if key_tonic == self._signed_key:  # the same signature restated is not a new one
+            return
+        self._signed_key = key_tonic
+        c = js_round(key_tonic) + 2  # the frame's centre is a whole position on the line of fifths
+        if self._frame_mode != "diatonic":
+            if self._onset < 0:
+                self.reset(collection_at(c))
+            return
+        self._frame_centre = c
+        self._fold_centre = c
+        self._collection_centre = c
+        self._anchor = c
+        self._scale[:] = _frame_scale(c)
+        self._kept.clear()
+        self._pending.clear()
+        # pcWindow = [], curOnsetPcs = []: the frame's evidence (and every incremental copy of it) restarts.
+        self._pc_window = []
+        self._cur_onset_pcs = []
+        self._occ = [[] for _ in range(12)]
+        self._heard_counts = [0] * 12
+        self._approx = [0.0] * 12
+        self._approx_age = 0
+        self._frame_memo = {}
+        self._frame_base = None
+
     def set_signature(self, key_tonic: float) -> None:
         """Set the key signature the ECONOMY fold counts accidentals from (``key_tonic`` as in :meth:`set_key`: the
         relative major's tonic on the line of fifths, 0 = C). The two-pass tier calls it before each note-on with the
@@ -1146,7 +1184,8 @@ class SpellingEngine:
         current surface's mean."""
         if not self._side_started:
             self._side_started = True
-            if x is not None:
+            # A supplied signature already seeded the start; the inferred side key does not replace it.
+            if x is not None and self._signed_key is None:
                 kt = 6 if math.isnan(x) else x
                 self.set_key(kt)
                 if self._onset < 0:
