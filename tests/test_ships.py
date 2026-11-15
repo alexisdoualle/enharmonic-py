@@ -1,4 +1,4 @@
-"""The 14-15 Nov 2026 ships (prod a861ace..b55bc34): ports of the matching cases in prod ``test/speller.test.ts``."""
+"""The 14-15 Nov 2026 ships (prod a861ace..a693abd): ports of the matching cases in prod ``test/speller.test.ts``."""
 
 from dataclasses import replace
 
@@ -253,4 +253,6 @@ def test_minor_collection_holds_its_leading_tone():
     last3 = lambda s: " ".join(_play(s, seq).split(" | ")[-3:])  # noqa: E731
     assert last3(Speller()) == "G F# G"
     assert last3(_EngineSpeller(SpellingEngine(replace(RT_PRESET, minor_leading_tone=False)))) == "G Gb G"
-    assert not LA_PRESET.minor_leading_tone and not TP_PASS_PRESET.minor_leading_tone
+    assert last3(Speller(look_ahead=True)) == "G F# G"
+    assert last3(_EngineSpeller(SpellingEngine(replace(LA_PRESET, minor_leading_tone=False)))) == "G Gb G"
+    assert not TP_PASS_PRESET.minor_leading_tone

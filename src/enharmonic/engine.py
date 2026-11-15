@@ -221,7 +221,7 @@ RT_PRESET = EngineOptions(
     # Real-time only: in look-ahead the inferred side key re-centres the fold and undoes it.
     frame_twin=True,
     # A minor key's collection holds its leading tone: a chromatic note heard in the frame's relative minor is scored
-    # with the raised 7th in its slot (C minor G-F#-G, not Gb). Real-time only.
+    # with the raised 7th in its slot (C minor G-F#-G, not Gb). Also on in look-ahead (LA_PRESET).
     minor_leading_tone=True,
 )
 
@@ -239,6 +239,9 @@ LA_PRESET = EngineOptions(
     side_weight=1, side_radius=8,
     ornament_ms=80,
     vertical_weight=2, vertical_pc_triad=True,
+    # A minor key's collection holds its leading tone, as in real time (C minor G-F#-G, not Gb). The two-pass
+    # passes run the mean frame, where the rule does not apply.
+    minor_leading_tone=True,
 )
 
 #: TWO-PASS per-direction pass (:func:`enharmonic.spell_two_pass`).
