@@ -103,11 +103,26 @@ class _Scan:
         return best_key_centred(h, _TABLE)
 
 
-def _deepen(keys: Sequence[Optional[LocalKey]]) -> list[Optional[float]]:
-    """DEEPENING: each new key goes along the spiral from the current side, within +-7 accidentals."""
+def _deepen(keys: Sequence[Optional[LocalKey]], key_return: bool = False) -> list[Optional[float]]:
+    """DEEPENING: each new key goes along the spiral from the current side, within +-7 accidentals.
+
+    ``key_return`` (two-pass only): a key written on the near side only because its far reading is past the +-7
+    limit is a readability respell. When the music returns to the key in force before it, that key keeps its prior
+    side. Pathetique ii: Ab minor (-7) -> Fb major, forced to E major (+4) -> Ab minor, read -7 again, not G# minor
+    (+5). A parallel key (same tonic), or the parallel of the relative, of the forced key or of the key just before
+    keeps that key's tonic letter, so it is never a return; such a candidate disarms the pending return."""
     prev: Optional[float] = None
     last_raw: Optional[float] = None
     last_out: Optional[float] = None
+    # key_return: the key just before (held), and, once the limit forces a respell, the key in force before it (pre)
+    # and the forced key itself, each with its side.
+    held: Optional[tuple[LocalKey, float]] = None
+    pre: Optional[tuple[LocalKey, float]] = None
+    forced: Optional[tuple[LocalKey, float]] = None
+
+    def parallel(a: Optional[tuple[LocalKey, float]], k: LocalKey) -> bool:
+        return a is not None and (a[0].tonic == k.tonic or (a[0].tonic + (3 if a[0].minor else 9)) % 12 == k.tonic)
+
     res: list[Optional[float]] = []
     for k in keys:
         if k is None:
@@ -118,15 +133,27 @@ def _deepen(keys: Sequence[Optional[LocalKey]]) -> list[Optional[float]]:
             res.append(last_out)
             continue
         last_raw = x
+        if pre is not None and prev is not None and k.tonic == pre[0].tonic and k.minor == pre[0].minor:
+            ret = None if (parallel(forced, k) or parallel(held, k)) else pre[1]
+            pre = forced = None
+            if ret is not None:
+                prev = last_out = ret
+                held = (k, ret)
+                res.append(ret)
+                continue
         if prev is None:
             out = x
         else:
-            cands = [6.0, -6.0] if math.isnan(x) else [x, x + 12, x - 12]
+            cands = [6, -6] if math.isnan(x) else [x, x + 12, x - 12]
             ok = [c for c in cands if abs(c) <= _DEEPEN]
             out = _near(ok if ok else cands, prev)
+            if key_return and not math.isnan(x) and _near(cands, prev) != out and held is not None:
+                pre = held
+                forced = (k, out)
         if not math.isnan(out):
             prev = out
         last_out = out
+        held = (k, out)
         res.append(out)
     return res
 
@@ -195,9 +222,13 @@ def _centred_keys(notes: Sequence[KeyNote], radius: int) -> list[Optional[LocalK
     return keys
 
 
-def centred_side_keys(notes: Sequence[KeyNote], radius: int = CENTRED_SIDE_RADIUS) -> list[Optional[float]]:
+def centred_side_keys(notes: Sequence[KeyNote], radius: int = CENTRED_SIDE_RADIUS,
+                      key_return: bool = True) -> list[Optional[float]]:
     """OFFLINE side keys, for the two-pass tier: each note's key is read on the onsets centred on it (+-48 onsets, the
     note's own included), with the same table and deepening as :func:`side_keys` and no confirmation step (a centred
     window already sees the passage on both sides). Same output convention: the relative major's tonic on the line
-    of fifths (deepened up to +-7), NaN for the F#/Gb tie, None for none. Not look-ahead legal."""
-    return _deepen(_centred_keys(notes, radius))
+    of fifths (deepened up to +-7), NaN for the F#/Gb tie, None for none. Not look-ahead legal. ``key_return``
+    (default True): a return to the key in force before a limit-forced respell keeps that key's side (see
+    ``_deepen``; ``TwoPassOptions.key_return``)."""
+    return _deepen(_centred_keys(notes, radius), key_return)
+

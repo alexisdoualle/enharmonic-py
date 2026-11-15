@@ -77,6 +77,11 @@ class TwoPassOptions:
     #: deepened key) is written either way and cannot choose: the pass counts from C there. Clair de lune m44-47
     #: (Db major): the passes keep Debussy's Gb, Db, Eb, Ab instead of F#, C#, D#, G#.
     key_side: bool = True
+    #: A KEY KEEPS ITS SIDE ON RETURN (``key_side``'s key reader). A key written on the near side only because its far
+    #: reading is past the +-7 deepening limit is a readability respell; when the music returns to the key it came
+    #: from, that key keeps its prior side. Pathetique ii: Ab minor (-7) -> Fb major, forced to E major (+4) -> Ab
+    #: minor at m48, read -7 again instead of G# minor (+5). Inert when ``key_side`` is off.
+    key_return: bool = True
     #: A STRUCK TRIAD SPELLS ITS THIRD MEMBER. After the merge, where the three pitch classes of a major or minor triad
     #: are attacked together at a note's onset and the other two members are spelled coherently with each other (one
     #: spelling each), a note a comma off the triad (a diminished fourth or augmented second inside it) takes the
@@ -229,10 +234,10 @@ def _struck_triad_repairs(N: Sequence[TwoPassNote], out: Sequence[Optional[int]]
     return fix
 
 
-def _side_signatures(notes: Sequence[TwoPassNote]) -> list[Optional[float]]:
+def _side_signatures(notes: Sequence[TwoPassNote], key_return: bool) -> list[Optional[float]]:
     """``key_side``: each note's signature for the passes (0 = count from C), None before any key is read."""
     return [None if x is None else 0 if (math.isnan(x) or abs(x) > _KEY_SIDE_MAX_ACCIDENTALS) else x
-            for x in centred_side_keys(notes)]
+            for x in centred_side_keys(notes, key_return=key_return)]
 
 
 def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: Optional[list[int]],
@@ -360,7 +365,7 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
     # The local keys are read in forward time on onsets centred on each note; the backward pass reads them too.
     keys_f = local_keys(N, "tonic-triad", 12) if opts.leading_tone_gate else None
     deg_f = degree_keys(N) if opts.key_degree_gate else None
-    sig_f = _side_signatures(N) if opts.key_side else None
+    sig_f = _side_signatures(N, opts.key_return) if opts.key_side else None
     fwd = _drive_pass(N, dirs_f, exact_f, opts.onset_tolerance, f_frames, out_f, keys_f, deg_f, sig_f)
     T = max(x.t_off for x in N)
     b_notes = [TwoPassNote(x.midi, T - x.t_off, T - x.t_on) for x in N][::-1]
