@@ -21,8 +21,8 @@ class _Hooked:
         self.rows = []
 
     def note_on(self, midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0,
-                local_key=None, degree_key=None):
-        self.s.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role, local_key, degree_key)
+                local_key=None, degree_key=None, **ctx):
+        self.s.note_on(midi, t, resolve_dir, resolve_exact, outward_partner, outward_role, local_key, degree_key, **ctx)
         d = self.s.engine.decision()
         self.rows.append(None if d is None else [
             lof_of(d.chosen), [lof_of(p) for p in d.scale],

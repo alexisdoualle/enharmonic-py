@@ -1278,6 +1278,14 @@ class SpellingEngine:
             sc = self.get_resolved_scale()
             mean = sum(lof_of(p) for p in sc) / len(sc)
             x = 6 if abs(6 + 2 - mean) <= abs(-6 + 2 - mean) else -6
+        # A supplied signature picks the comma of the inferred key (variant B, chosen 15 Nov 2026): an inferred key
+        # with a conventional reading (at most 7 accidentals) one comma nearer the signature takes that reading (C#
+        # major under five flats is Db major). A modulation the signature does not name still re-centres the fold.
+        sig = self._signed_key
+        if sig is not None:
+            for c in (x + 12, x - 12):
+                if abs(c) <= 7 and abs(c - sig) < abs(x - sig):
+                    x = c
         if x != self._side_x:  # NaN != NaN, as in JS
             self.set_key(x)
             self._side_x = x

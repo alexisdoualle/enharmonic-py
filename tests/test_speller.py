@@ -71,10 +71,10 @@ def test_readme_quickstart():
 
 
 def test_key_tonic_and_set_key_run():
-    # Values checked against prod TypeScript: a lone 61 stays C#, a struck Db-F-Ab triad is Db.
+    # Since prod c8e02c2 the signature names the opening collection: a lone 61 is Db, as the struck Db-F-Ab triad.
     s = Speller(key_tonic=-5)
     s.note_on(61, t=0)
-    assert tok(s.get_spelling(61)) == "C#"
+    assert tok(s.get_spelling(61)) == "Db"
     s = Speller(key_tonic=-5)
     for m in (61, 65, 68):
         s.note_on(m, t=0)

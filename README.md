@@ -6,9 +6,13 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`main` at `1cb2979`** note for note: 0 mismatches over
-3.72 M compared notes (60 lab fixtures, Meredith clean and noisy, 36 seeded random streams; every mode).
-See [Parity](#parity).
+**Port status:** matches prod `enharmonic` **`main` at `b55bc34`** (15 Nov 2026) note for note: 0
+mismatches over 5.40 M compared notes (60 lab fixtures with and without the notated key, Meredith clean
+and noisy, 36 seeded random streams; every mode and option variant). See [Parity](#parity).
+
+**Version:** `0.1.2` (`__version__`). TODO before any release: match the npm version of the TypeScript
+package and publish to PyPI (TestPyPI first; the name `enharmonic` is taken on PyPI, check its owner
+first). Not done here.
 
 **Speed:** 80,000 to 100,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
 See [Performance](#performance).
@@ -52,18 +56,22 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `Speller()` | `new Speller()` | real-time |
 | `Speller(look_ahead=True)` | `new Speller({ lookAhead: true })` | near-real-time |
 | `Speller(key_tonic=-5, onset_tolerance=30)` | `{ keyTonic, onsetTolerance }` | |
-| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0, local_key=None, degree_key=None)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole, localKey, degreeKey })` | |
+| `s.note_on(midi, t=None, resolve_dir=0, resolve_exact=0, outward_partner=None, outward_role=0, local_key=None, degree_key=None, side_key=<omitted>, dominant=None)` | `noteOn(midi, { t, resolveDir, resolveExact, outwardPartner, outwardRole, localKey, degreeKey, sideKey, dominant })` | |
 | `s.note_off(midi, t=None)` | `noteOff(midi, { t })` | |
 | `s.get_spelling(midi)` -> `Pitch \| None` | `getSpelling(midi)` | |
 | `s.get_lof(midi)` -> line-of-fifths int | (Python only; C=0, G=1, F=-1) | |
-| `s.set_key(tonic)`, `s.reset(scale=None)`, `s.get_resolved_scale()` | same | |
+| `s.set_key(tonic)` (a notated key-signature change: the signature names the collection until the music contradicts it), `s.reset(scale=None)`, `s.get_resolved_scale()` | same | |
 | `spell_two_pass(notes, TwoPassOptions())` | `spellTwoPass(notes, opts)` | offline |
-| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, leading_tone_gate=True, key_degree_gate=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, leadingToneGate, keyDegreeGate, onsetTolerance, ... }` | |
+| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, aug6_chord_meet=0, leading_tone_gate=True, key_degree_gate=True, run_boundary=True, triangle_free_context=True, key_side=True, key_return=True, struck_triad_third=True, key_signatures=None, key_signature_anchor=True, short_flip=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, aug6ChordMeet, leadingToneGate, keyDegreeGate, runBoundary, triangleFreeContext, keySide, keyReturn, struckTriadThird, keySignatures, keySignatureAnchor, shortFlip, onsetTolerance, ... }` | |
 | `spell_two_pass_traced(notes)` | `spellTwoPassTraced` | (introspection) |
 | `CoreSpeller(...)` | `CoreSpeller` (src/core.ts) | real-time |
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
 | `resolve_step`, `resolve_exact_step` | same | |
-| `outward_pairs(notes, look=8, first_move_meet=True)` -> `OutwardPairs(partner, role)` | `outwardPairs(notes, look, { firstMoveMeet })` (aug6 context for look-ahead) | |
+| `outward_pairs(notes, look=8, first_move_meet=True, chord_meet=3)` -> `OutwardPairs(partner, role)` | `outwardPairs(notes, look, { firstMoveMeet, chordMeet })` (aug6 context for look-ahead) | |
+| `resolution_dirs(notes, mode="own-voice", window=16, max=128)` -> `ResolutionDirs(dir, exact)` | `resolutionDirs(notes, { mode, window, max })` (`resolve_dir` / `resolve_exact`: the 16-note buffer, then the note's own voice) | |
+| `side_keys(notes)` -> `list[float \| None]` | `sideKeys` (key -> side context for look-ahead: `side_key`; NaN = the F#/Gb tie) | |
+| `centred_side_keys(notes, radius=48, key_return=True)`, `anchored_side_keys(notes, sigs, inferred)` | `centredSideKeys`, `anchoredSideKeys` (the two-pass side keys) | |
+| `dominant_chords(notes, reach=16)` -> `list[DominantChord \| None]` | `dominantChords(notes, { reach })` (tendency-tone context for look-ahead: `dominant`) | |
 | `local_keys(notes, table="tonic-triad", radius=12, unit="onsets")` -> `list[LocalKey \| None]` | `localKeys(notes, { table, radius, unit })` (leading-tone gate context for look-ahead) | |
 | `degree_keys(notes)` -> `list[LocalKey \| None]` | `degreeKeys` (key-degree gate context: tonic-triad table on +-12 notes) | |
 | `Pitch`, `PitchClass`, `Interval` (frozen dataclasses), `midi_of`, `pitch_class_value`, `pitch_to_string`, `interval_between`, `interval_label`, `enharmonic_candidates_for` | same | |
@@ -86,6 +94,9 @@ the same onset may revise it); `t` groups co-struck notes into one onset.
 | `kernel.ts` | `kernel.py` |
 | `aug6.ts` | `aug6.py` |
 | `key.ts` | `key.py` |
+| `key-side.ts` | `key_side.py` |
+| `dominant.ts` | `dominant.py` |
+| `resolution.ts` | `resolution.py` |
 | `core.ts` | `core.py` |
 | `engine.ts` | `engine.py` |
 | `speller.ts` | `speller.py` |
@@ -142,12 +153,16 @@ Input sets and modes:
 - **random**: 36 streams, 37,215 notes (chords up to 10 notes, unisons, overlapping same-pitch voices,
   long rests, MIDI 0..127, zero-length and never-released notes, stray note-offs, shuffled tie order,
   float-time spread chords). Modes `core rt la tp` plus option variants `rt_tol30 la_tol30 rt_key3
-  la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff
-  tp_meetoff tp_kdgoff`.
+  rt_keym5 la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff
+  tp_meetoff tp_kdgoff tp_chord3 tp_runoff tp_trioff tp_sideoff tp_retoff tp_triadoff tp_sfoff tp_sigm6
+  tp_sigvar tp_sigoff`, and engine-option variants the Speller does not expose (`rt_twinoff`
+  frame_twin off, `rt_mltoff` minor_leading_tone off, `la_pvoff` aug6_passing_voice off).
 - **fixtures**: the lab's 60 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 322,426
-  notes, `core rt la tp`; the 7 curated prod fixtures also run the option variants.
+  notes, `core rt la tp`, and keyed runs over all 60 (`rt_keyed la_keyed`: `key_tonic` / `set_key` from
+  each fixture's respell events; `tp_keyed`: `key_signatures`; the key hint is stored with the goldens);
+  the 7 curated prod fixtures also run the option variants.
 - **meredith-clean / meredith-noisy**: 216 movements each, 195,972 notes, driven exactly like
-  `test/eval/meredith.ts` (125 ms per tatum, look-ahead over the next 16 notes).
+  `test/eval/meredith.ts` (125 ms per tatum, look-ahead with every context prod's harness feeds).
 - **traces**: per-note `DecisionCandidate` rows (rt, la) and the two-pass forward/backward/merge trace
   for 2 fixtures and 3 random streams, to localise any divergence.
 - **pure**: `letter/acc/pitchClass/letterAt/collectionAt/candidates/consonance/intervalScore/intervals/
