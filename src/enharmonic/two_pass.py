@@ -191,6 +191,10 @@ def _struck_triad_repairs(N: Sequence[TwoPassNote], out: Sequence[Optional[int]]
         if o is None:
             continue
         pc, S = pcs[t], sounding[t]
+        # Every template below needs its two other members sounding; most notes have none, so test that first
+        # (the same condition the loop tests before it reads the co-sounding spellings).
+        if not any(all((pc - ms + s2) % 12 in S for s2, _ in tpl if s2 != ms) for tpl in _TRIADS for ms, _ in tpl):
+            continue
         lo, hi = max(0, t - _TRIAD_SCAN), min(n, t + _TRIAD_SCAN)
         ton, toff = N[t].t_on, N[t].t_off
         # The spellings of each pitch class among the notes overlapping this one (insertion-ordered, like a JS Set).

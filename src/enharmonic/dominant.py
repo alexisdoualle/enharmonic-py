@@ -44,7 +44,19 @@ _TEMPLATES: dict[str, tuple[tuple[int, int], ...]] = {
 }
 
 
+_CHORD_MEMO: dict[frozenset[int], Optional[tuple[str, int]]] = {}
+
+
 def chord_of(pcs: set[int]) -> Optional[tuple[str, int]]:
+    """:func:`_chord_of`, memoised (a pure function of the pitch-class set)."""
+    key = frozenset(pcs)
+    v = _CHORD_MEMO.get(key, False)
+    if v is False:
+        v = _CHORD_MEMO[key] = _chord_of(key)
+    return v  # type: ignore[return-value]
+
+
+def _chord_of(pcs: frozenset[int]) -> Optional[tuple[str, int]]:
     """The chord a pitch-class set best matches, as (name, root): the root must sound and at least 2 template tones;
     ranked by (template complete, matched - extras, matched, -extras, template size), the first best kept."""
     best: Optional[tuple[tuple[int, ...], str, int]] = None
