@@ -89,7 +89,7 @@ def _first_exact_moves(notes: Sequence[Any], at: list[int]) -> list[int]:
     return exact
 
 
-def outward_pairs(notes: Sequence[Any], look: int = 8, first_move_meet: bool = True) -> OutwardPairs:
+def outward_pairs(notes: Sequence[Any], look: int = 8, first_move_meet: bool = True, chord_meet: int = 3) -> OutwardPairs:
     """Outward-convergence pairs. Note x and a note y sounding at x's onset pair up when x is ten semitones
     above y by pitch class, the major third above y sounds, each tone's first move is outward (x up, y down),
     and one onset among the next ``look`` after x's strikes both x+1 and y-1 at the exact pitch, or
@@ -98,7 +98,13 @@ def outward_pairs(notes: Sequence[Any], look: int = 8, first_move_meet: bool = T
 
     MEETING BY FIRST MOVES (``first_move_meet``, default True): the two tones of an augmented sixth also meet
     when their first moves (re-strikes skipped) land on one onset, however far away: a German sixth repeated
-    across many onsets (Haydn Sym. 99/ii) resolves past the look window, but both tones still move at once."""
+    across many onsets (Haydn Sym. 99/ii) resolves past the look window, but both tones still move at once.
+
+    A UNISON MEET RESOLVES INTO A CHORD (``chord_meet``, default 3, the look-ahead tier's; 0 turns it off): when the
+    two goals are one pitch (the tones a major second apart closing onto a unison), the pair counts only if the
+    meeting onset strikes at least this many notes. Two lone voices crossing on one note are passing, not an
+    augmented sixth: in C minor, Ab and F# landing on a struck G chord are an aug6; the same two tones meeting on a
+    bare G are not. :func:`enharmonic.spell_two_pass` passes 0 unless ``aug6_chord_meet`` is set."""
     n = len(notes)
     partner = [-1] * n
     role = [0] * n
@@ -133,10 +139,14 @@ def outward_pairs(notes: Sequence[Any], look: int = 8, first_move_meet: bool = T
             g = x
             while g < n and ton[g] == t:
                 g += 1
+            # A unison meet (both goals one pitch) needs a chord at the meeting onset (chord_meet); onset_end[h] - h
+            # is how many notes the onset starting at note h strikes.
+            unison = chord_meet > 0 and midis[x] + 1 == midis[y] - 1
             met = False
             seen = 0
             while g < n and seen < look:
                 tg = ton[g]
+                g0 = g
                 up = dn = False
                 while g < n and ton[g] == tg:
                     if midis[g] == midis[x] + 1:
@@ -144,12 +154,13 @@ def outward_pairs(notes: Sequence[Any], look: int = 8, first_move_meet: bool = T
                     if midis[g] == midis[y] - 1:
                         dn = True
                     g += 1
-                if up and dn:
+                if up and dn and not (unison and onset_end[g0] - g0 < chord_meet):
                     met = True
                     break
                 seen += 1
             # "The two tones meet when their first moves, re-strikes skipped, land on one onset."
-            if not met and first_move_meet and move_at[x] >= 0 and move_at[x] == move_at[y]:
+            if (not met and first_move_meet and move_at[x] >= 0 and move_at[x] == move_at[y]
+                    and not (unison and onset_end[move_at[x]] - move_at[x] < chord_meet)):
                 met = True
             if not met:
                 continue

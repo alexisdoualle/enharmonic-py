@@ -151,6 +151,12 @@ class EngineOptions:
     #: (:func:`enharmonic.outward_pairs`) whose meeting pitch is a key degree and whose rising tone is chromatic
     #: is spelled ten fifths from its partner (the rising tone sharp), dispositively.
     aug6_outward: bool = False
+    #: AN AUG6 MEETING THAT NEEDS A DOUBLE FLAT ON A NATURAL IS A PASSING VOICE (with ``aug6_outward``). When the rule
+    #: would spell the falling tone as a double flat while the frame names that pitch class with a natural, the pair
+    #: is one passing voice: neither tone takes the rule, the rising one included, until either tone is released. In
+    #: an A-major frame, C and D (tones of a D7) both moving onto one C# would give C and Ebb; the frame names D, so
+    #: they stay C and D (Villa-Lobos, Bachianas 5 m7).
+    aug6_passing_voice: bool = False
     #: LEADING-TONE GATE (look-ahead only): a leading tone of the local key (its sharp 4; in minor also the raised
     #: 6th and 7th) is named by the key, and a falling chromatic line from it cancels it (C#->C in D minor is C#,
     #: not Db). A note that falls a semitone (``resolve_dir`` -1) and is a leading tone of its ``local_key``
@@ -190,7 +196,8 @@ LA_PRESET = EngineOptions(
     look_ahead=True, look_ahead_weight=2, leading_tone_boost=1,
     double_acc_penalty=2,
     frame_mode="diatonic", onset_revise=True, guard_raise_line=True,
-    aug6_outward=True, leading_tone_gate=True, key_degree_gate=True, held_letter_target=True,
+    aug6_outward=True, aug6_passing_voice=True, leading_tone_gate=True, key_degree_gate=True,
+    held_letter_target=True,
     side_weight=1, side_radius=8,
     ornament_ms=80,
     vertical_weight=2, vertical_pc_triad=True,
@@ -281,6 +288,7 @@ class SpellingEngine:
         self._ornament_ms = o.ornament_ms
         self._vertical_pc_triad = o.vertical_pc_triad
         self._aug6_outward = o.aug6_outward
+        self._aug6_passing_voice = o.aug6_passing_voice
         self._leading_tone_gate = o.leading_tone_gate
         self._key_degree_gate = o.key_degree_gate
         self._held_letter_target = o.held_letter_target
@@ -306,6 +314,8 @@ class SpellingEngine:
         self._cur_onset_outward: dict[int, tuple[int, int]] = {}  # midi -> (partner midi, role)
         self._cur_onset_key: dict[int, LocalKey] = {}  # midi -> local key (the leading-tone gate's)
         self._cur_onset_degree_key: dict[int, LocalKey] = {}  # midi -> the key-degree gate's key
+        # aug6_passing_voice: pairs judged one passing voice, (rising midi, falling midi), until either is released.
+        self._dead_pairs: set[tuple[int, int]] = set()
         self._guard_before: list[Optional[tuple[int, int]]] = [None] * 7
         self._guard_memo: Optional[list[Optional[tuple[int, int]]]] = None
         self._kept: dict[int, int] = {}
@@ -645,7 +655,21 @@ class SpellingEngine:
         rising_pc = (midi if role == 1 else partner) % 12
         if meet_pc not in coll or rising_pc in coll:
             return None
-        return partner_n + 10 if role == 1 else partner_n - 10
+        out = partner_n + 10 if role == 1 else partner_n - 10
+        if self._aug6_passing_voice:
+            # A falling tone the rule would write as a double flat of a pitch the frame names natural (A -> Bbb): the
+            # pair is a passing voice, and stays one for both tones while they sound.
+            key = (midi, partner) if role == 1 else (partner, midi)
+            if key in self._dead_pairs:
+                return None
+            if role == -1:
+                fall_pc = midi % 12
+                if fall_pc in coll:
+                    framed = next(letter_at(s, centre) for s in LETTER_ORDER if pitch_class(letter_at(s, centre)) == fall_pc)
+                    if acc(out) <= -2 and acc(framed) == 0:
+                        self._dead_pairs.add(key)
+                        return None
+        return out
 
     def _surface_collection_centre(self) -> int:
         """Centre of the 7-fifth window covering the most of the drifting surface's slots (ties to the median)."""
@@ -1002,6 +1026,8 @@ class SpellingEngine:
             self._kept[letter(n)] = n
 
     def note_off(self, midi: int, t: Optional[float] = None) -> None:
+        if self._dead_pairs:
+            self._dead_pairs = {k for k in self._dead_pairs if k[0] != midi and k[1] != midi}
         p = self._pending.get(midi)
         if p is not None:
             del self._pending[midi]
