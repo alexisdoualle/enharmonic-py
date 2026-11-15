@@ -44,6 +44,12 @@ class TwoPassOptions:
     #: least this many notes. Default 0 (off): the look-ahead tier ships it at 3, but on two-pass its fixes were
     #: mostly wrong -> flipped and it did not confirm on the fresh15 set.
     aug6_chord_meet: int = 0
+    #: NO PASSAGE BOUNDARY INSIDE A REPEATED RUN. Where the passes disagree, the merge may not place its side change
+    #: between two strikes of a repeated run (three or more strikes of one pitch, at most 16 onsets apart, over one
+    #: bass pitch class) that lies inside the disagreement: the cut moves to the run's start or end. Confutatis m28:
+    #: the bass repeats Eb four times under Cb and Bb; the forward pass reads the bar sharp, the backward pass flat,
+    #: and the cut may no longer fall between the strikes (D# x6 then Eb).
+    run_boundary: bool = True
     #: an aug6 pair (ten fifths) whose sharper tone rises and flatter tone falls is not a wolf in the merge
     aug6_wedge: bool = True
     #: feed both passes each note's local key (the engine's ``leading_tone_gate``): the ``"tonic-triad"`` table
@@ -158,6 +164,53 @@ def _drive_pass(notes: Sequence[TwoPassNote], dirs: Optional[list[int]], exact: 
     return out
 
 
+def _run_pairs(N: Sequence[TwoPassNote]) -> list[tuple[int, int]]:
+    """Repeated runs, for the merge's no-boundary rule: three or more strikes of one MIDI pitch, consecutive strikes
+    at most 16 onsets apart, over one bass pitch class (the lowest note sounding at each strike). Returns every pair
+    of consecutive strikes (a, b) (indices into the sorted notes), sorted. A re-struck pitch is read as one voice."""
+    n = len(N)
+    onset_idx: list[int] = []
+    g = -1
+    last_t = -math.inf
+    for x in N:
+        if x.t_on != last_t:
+            g += 1
+            last_t = x.t_on
+        onset_idx.append(g)
+    bass: list[int] = []
+    for k, x in enumerate(N):
+        b = x.midi
+        for m in range(k - 1, max(0, k - 64) - 1, -1):
+            if N[m].t_off > x.t_on and N[m].midi < b:
+                b = N[m].midi
+        m = k + 1
+        while m < min(n, k + 64) and N[m].t_on == x.t_on:
+            if N[m].midi < b:
+                b = N[m].midi
+            m += 1
+        bass.append(b % 12)
+    by_midi: dict[int, list[int]] = {}
+    for k, x in enumerate(N):
+        a = by_midi.setdefault(x.midi, [])
+        if not a or N[a[-1]].t_on != x.t_on:
+            a.append(k)
+    pairs: list[tuple[int, int]] = []
+    for ks in by_midi.values():
+        cur: list[int] = []
+        for k in ks:
+            if cur:
+                p = cur[-1]
+                if onset_idx[k] - onset_idx[p] > 16 or bass[k] != bass[p]:
+                    if len(cur) >= 3:
+                        pairs.extend(zip(cur, cur[1:]))
+                    cur = []
+            cur.append(k)
+        if len(cur) >= 3:
+            pairs.extend(zip(cur, cur[1:]))
+    pairs.sort()
+    return pairs
+
+
 def _order(notes: Sequence[TwoPassNote]) -> list[int]:
     return sorted(range(len(notes)), key=lambda i: (notes[i].t_on, notes[i].midi))
 
@@ -270,6 +323,8 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
                 return False
         return True
 
+    runs = _run_pairs(N) if opts.run_boundary else []
+    run_at = 0  # runs[] sorted by first strike; disagreement runs only move forward
     i = max(0, first_agree)
     while i <= last_agree:
         if agree_arr[i]:
@@ -303,10 +358,23 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
                     cost += 1
             return cost
 
+        # NO BOUNDARY INSIDE A REPEATED RUN: the run pairs with both strikes in [i, j). A change-point that splits
+        # one costs more than any wolf count in the window, so the cut lands before or after the run.
+        while run_at < len(runs) and runs[run_at][0] < i:
+            run_at += 1
+        inner: list[tuple[int, int]] = []
+        r = run_at
+        while r < len(runs) and runs[r][0] < j:
+            if runs[r][1] < j:
+                inner.append(runs[r])
+            r += 1
+        W = j - i + 2
         cost: list[int] = []
         min_cost = math.inf
         for k in range(i, j + 1):
             c = cost_of(k)
+            if inner:
+                c += W * sum(1 for a, b in inner if pick(k, a) != pick(k, b))
             cost.append(c)
             if c < min_cost:
                 min_cost = c
