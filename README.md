@@ -10,9 +10,7 @@ context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 mismatches over 5.45 M compared notes (60 lab fixtures with and without the notated key, Meredith clean
 and noisy, 36 seeded random streams; every mode and option variant). See [Parity](#parity).
 
-**Version:** `0.1.2` (`__version__`). TODO before any release: match the npm version of the TypeScript
-package and publish to PyPI (TestPyPI first; the name `enharmonic` is taken on PyPI, check its owner
-first). Not done here.
+**Version:** `0.2.0` (`__version__`), the same version as the npm package. Install with `pip install enharmonic`.
 
 **Speed:** 80,000 to 100,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
 See [Performance](#performance).
@@ -23,11 +21,12 @@ Same output as the TypeScript library, so the same scores. Clean Meredith (216 m
 our four modes beside published spellers, grouped by latency (exact % above each bar, coherent % below).
 Method and noisy-corpus figures are in the [TypeScript repo](https://github.com/alexisdoualle/enharmonic#status).
 
-![Meredith clean: our four modes beside Chew & Chen, Cambouropoulos, PKSpell, ps13, Temperley and music21](docs/meredith-scoreboard.png)
+![Meredith clean: our four modes beside Chew & Chen, Cambouropoulos, PKSpell, ps13, Temperley and music21](https://raw.githubusercontent.com/alexisdoualle/enharmonic-py/main/docs/meredith-scoreboard.png)
 
 ## Install
 
 ```bash
+pip install enharmonic      # from PyPI
 pip install -e .            # from this checkout
 pip install -e '.[test]'    # + pytest
 ```
