@@ -17,6 +17,14 @@ first). Not done here.
 **Speed:** 80,000 to 100,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
 See [Performance](#performance).
 
+## Accuracy
+
+Same output as the TypeScript library, so the same scores. Clean Meredith (216 movements, 195,972 notes),
+our four modes beside published spellers, grouped by latency (exact % above each bar, coherent % below).
+Method and noisy-corpus figures are in the [TypeScript repo](https://github.com/alexisdoualle/enharmonic#status).
+
+![Meredith clean: our four modes beside Chew & Chen, Cambouropoulos, PKSpell, ps13, Temperley and music21](docs/meredith-scoreboard.png)
+
 ## Install
 
 ```bash
