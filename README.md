@@ -10,7 +10,7 @@ context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 mismatches over 5.45 M compared notes (60 lab fixtures with and without the notated key, Meredith clean
 and noisy, 36 seeded random streams; every mode and option variant). See [Parity](#parity).
 
-**Version:** `0.2.0` (`__version__`), the same version as the npm package. Install with `pip install enharmonic`.
+**Version:** `0.2.1` (`__version__`), the same version as the npm package. Install with `pip install enharmonic`.
 
 **Speed:** 80,000 to 100,000 notes per second in real time on an Apple M1 Pro, plenty for live MIDI.
 See [Performance](#performance).
