@@ -12,7 +12,7 @@ from typing import Iterable, Optional
 
 from ._js import js_sign
 from .lof import C_MAJOR, LETTER_ORDER, acc, candidates, letter, lof_of, pitch_class, spelling_of
-from .pitch import Pitch, PitchClass
+from .pitch import Pitch, PitchClass, pitch_at
 from .scoring import CONSONANCE_BY_DISTANCE
 
 
@@ -123,4 +123,4 @@ class CoreSpeller:
         if n is None:
             return None
         sp = spelling_of(n)
-        return Pitch(sp.step, sp.alter, midi // 12 - 1)
+        return pitch_at(sp, midi)

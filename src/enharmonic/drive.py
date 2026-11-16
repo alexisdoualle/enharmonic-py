@@ -26,7 +26,7 @@ from .key_side import side_keys
 from .resolution import resolution_dirs
 from .core import CoreSpeller
 from .lof import spelling_of
-from .pitch import Pitch
+from .pitch import Pitch, pitch_at
 from .speller import Speller
 from .two_pass import TwoPassNote, spell_two_pass_lof
 
@@ -65,7 +65,7 @@ def _pitch(n: Optional[int], midi: int) -> Optional[Pitch]:
     if n is None:
         return None
     sp = spelling_of(n)
-    return Pitch(sp.step, sp.alter, midi // 12 - 1)
+    return pitch_at(sp, midi)
 
 
 def drive_lof(s: StreamingSpeller, events: Sequence[Event], horizon: int = 16) -> list[Optional[int]]:

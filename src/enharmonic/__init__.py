@@ -17,7 +17,7 @@ from .core import CoreSpeller
 from .drive import drive, on_notes, spell_events
 from .interval import Interval, interval_between, interval_label
 from .kernel import resolve_exact_step, resolve_step
-from .pitch import Pitch, PitchClass, midi_of, pitch_class_value, pitch_to_string
+from .pitch import Pitch, PitchClass, midi_of, pitch_at, pitch_class_value, pitch_to_string
 from .speller import Speller
 from .two_pass import TwoPassNote, TwoPassOptions, spell_two_pass, spell_two_pass_traced
 
@@ -30,6 +30,6 @@ __all__ = [
     "anchored_side_keys", "SIGNATURE_NEIGHBOURHOOD",
     "dominant_chords", "DominantChord", "DOMINANT_REACH",
     "resolution_dirs", "ResolutionDirs", "RESOLUTION_WINDOW", "RESOLUTION_MAX",
-    "Pitch", "PitchClass", "midi_of", "pitch_class_value", "pitch_to_string",
+    "Pitch", "PitchClass", "midi_of", "pitch_at", "pitch_class_value", "pitch_to_string",
     "Interval", "interval_between", "interval_label", "enharmonic_candidates_for",
 ]

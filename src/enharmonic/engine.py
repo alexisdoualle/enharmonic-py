@@ -24,7 +24,7 @@ from .dominant import DominantChord
 from .key import LocalKey, is_key_degree, is_leading_tone, is_wide_leading_tone
 from ._js import js_round
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
-from .pitch import Pitch, PitchClass
+from .pitch import Pitch, PitchClass, pitch_at
 from .scoring import CONSONANCE_BY_DISTANCE
 
 FoldMode = Literal["clamp", "economy", "off"]
@@ -1216,7 +1216,7 @@ class SpellingEngine:
         if n is None:
             return None
         sp = spelling_of(n)
-        return Pitch(sp.step, sp.alter, midi // 12 - 1)
+        return pitch_at(sp, midi)
 
     def _keep(self, n: int) -> None:
         last = self._last_by_letter[letter(n)]

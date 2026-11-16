@@ -42,6 +42,13 @@ def midi_of(p: Pitch) -> int:
     return midi
 
 
+def pitch_at(pc: Union[PitchClass, Pitch], midi: int) -> Pitch:
+    """The Pitch that spells ``midi`` as ``pc``. The written octave follows the LETTER, not the MIDI number:
+    B♯3 and C4 are both MIDI 60, C♭5 and B4 are both MIDI 71 (B𝄪3 = 61, C𝄫5 = 70). Never compute the octave
+    as ``midi // 12 - 1``, which is wrong whenever the accidental crosses the B–C boundary."""
+    return Pitch(pc.step, pc.alter, (midi - pc.alter - LETTER_BASE[pc.step]) // 12 - 1)
+
+
 def pitch_class_value(p: Union[PitchClass, Pitch]) -> int:
     """12-tone pitch class (0..11). C = 0."""
     return (LETTER_BASE[p.step] + p.alter) % 12
