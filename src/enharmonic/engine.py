@@ -22,6 +22,7 @@ from typing import Iterable, Literal, Optional
 
 from .dominant import DominantChord
 from .key import LocalKey, is_key_degree, is_leading_tone, is_wide_leading_tone
+from .key_side import SIGNATURE_NEIGHBOURHOOD
 from ._js import js_round
 from .lof import COMMA, C_MAJOR, LETTER_ORDER, acc, candidates, letter, letter_at, lof_of, pitch_class, spelling_of
 from .pitch import Pitch, PitchClass, pitch_at
@@ -1315,10 +1316,13 @@ class SpellingEngine:
         # A supplied signature picks the comma of the inferred key (variant B, chosen 15 Nov 2026): an inferred key
         # with a conventional reading (at most 7 accidentals) one comma nearer the signature takes that reading (C#
         # major under five flats is Db major). A modulation the signature does not name still re-centres the fold.
+        # A reading past seven accidentals counts when it is within one fifth of the signature, as in the two-pass
+        # anchor (anchored_side_keys): under seven sharps the dominant G# major (+8) is G#, not Ab (-4). Farther from
+        # the signature the seven-accidental limit stands (Ab major under four sharps stays Ab, not G#).
         sig = self._signed_key
         if sig is not None:
             for c in (x + 12, x - 12):
-                if abs(c) <= 7 and abs(c - sig) < abs(x - sig):
+                if (abs(c) <= 7 or abs(c - sig) <= SIGNATURE_NEIGHBOURHOOD) and abs(c - sig) < abs(x - sig):
                     x = c
         if x != self._side_x:  # NaN != NaN, as in JS
             self.set_key(x)

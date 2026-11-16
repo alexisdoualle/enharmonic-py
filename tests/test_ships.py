@@ -212,6 +212,8 @@ def test_signature_picks_the_side_of_the_inferred_key():
     assert fold(4, [4, -4]) == -4
     assert fold(0, [0, -7]) == 5
     assert fold(-1, [-1, 6]) == -6
+    assert fold(7, [7, -4]) == 8    # A♭ major under seven sharps: G♯ major, one fifth from the signature
+    assert fold(-7, [-7, 4]) == -8  # E major under seven flats: F♭ major, one fifth from the signature
 
 
 # ── real-time frame rules ──────────────────────────────────────────────────────
