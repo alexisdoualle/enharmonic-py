@@ -258,7 +258,8 @@ def anchored_side_keys(notes: Sequence[KeyNote], sigs: Sequence[Optional[float]]
             out.append(s)
             continue
         x = _x_of(k)
-        cands = [c for c in ([-6, 6] if math.isnan(x) else [x, x + 12, x - 12]) if abs(c) <= _DEEPEN]
+        # Every reading counts, also past seven accidentals: G# major (+8) is one fifth from seven sharps.
+        cands = [-6, 6] if math.isnan(x) else [x, x + 12, x - 12]
         near = cands[0]
         for c in cands[1:]:
             if abs(c - s) < abs(near - s) or (abs(c - s) == abs(near - s) and abs(c) < abs(near)):
