@@ -141,6 +141,7 @@ EVENT_MODES: dict[str, Callable[[list], list[Lof]]] = {
     "tp_retoff": _tp(lambda: TwoPassOptions(key_return=False)),
     "tp_triadoff": _tp(lambda: TwoPassOptions(struck_triad_third=False)),
     "tp_sfoff": _tp(lambda: TwoPassOptions(short_flip=False)),
+    "tp_rroff": _tp(lambda: TwoPassOptions(run_repair=False)),
     "tp_sigm6": _tp_sigs(lambda i: -6),
     "tp_sigvar": _tp_sigs(synth_sig),
     "tp_sigoff": _tp_sigs(lambda i: -6, key_signature_anchor=False),

@@ -6,8 +6,8 @@
 Given a stream of MIDI note numbers, it decides whether `61` should be spelled `C♯` or `D♭` from musical
 context. Zero runtime dependencies, pure Python 3.10+, Apache-2.0.
 
-**Port status:** matches prod `enharmonic` **`80be116`** (15 Nov 2026) note for note: 0
-mismatches over 5.40 M compared notes (60 lab fixtures with and without the notated key, Meredith clean
+**Port status:** matches prod `enharmonic` **`1227796`** (16 Nov 2026) note for note: 0
+mismatches over 5.45 M compared notes (60 lab fixtures with and without the notated key, Meredith clean
 and noisy, 36 seeded random streams; every mode and option variant). See [Parity](#parity).
 
 **Version:** `0.1.2` (`__version__`). TODO before any release: match the npm version of the TypeScript
@@ -62,7 +62,7 @@ spell_events(events, mode="la")   # 'core' | 'rt' | 'la' | 'tp'; one Pitch per o
 | `s.get_lof(midi)` -> line-of-fifths int | (Python only; C=0, G=1, F=-1) | |
 | `s.set_key(tonic)` (a notated key-signature change: the signature names the collection until the music contradicts it), `s.reset(scale=None)`, `s.get_resolved_scale()` | same | |
 | `spell_two_pass(notes, TwoPassOptions())` | `spellTwoPass(notes, opts)` | offline |
-| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, aug6_chord_meet=0, leading_tone_gate=True, key_degree_gate=True, run_boundary=True, triangle_free_context=True, key_side=True, key_return=True, struck_triad_third=True, key_signatures=None, key_signature_anchor=True, short_flip=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, aug6ChordMeet, leadingToneGate, keyDegreeGate, runBoundary, triangleFreeContext, keySide, keyReturn, struckTriadThird, keySignatures, keySignatureAnchor, shortFlip, onsetTolerance, ... }` | |
+| `TwoPassOptions(aug6_outward=True, aug6_wedge=True, aug6_first_move_meet=True, aug6_chord_meet=0, leading_tone_gate=True, key_degree_gate=True, run_boundary=True, triangle_free_context=True, key_side=True, key_return=True, struck_triad_third=True, key_signatures=None, key_signature_anchor=True, short_flip=True, run_repair=True, onset_tolerance=0, ...)` | `{ aug6Outward, aug6Wedge, aug6FirstMoveMeet, aug6ChordMeet, leadingToneGate, keyDegreeGate, runBoundary, triangleFreeContext, keySide, keyReturn, struckTriadThird, keySignatures, keySignatureAnchor, shortFlip, runRepair, onsetTolerance, ... }` | |
 | `spell_two_pass_traced(notes)` | `spellTwoPassTraced` | (introspection) |
 | `CoreSpeller(...)` | `CoreSpeller` (src/core.ts) | real-time |
 | `drive(speller, events)`, `on_notes(events)`, `spell_events(events, mode)` | `test/eval/fixtures.ts` | batch |
@@ -154,7 +154,7 @@ Input sets and modes:
   long rests, MIDI 0..127, zero-length and never-released notes, stray note-offs, shuffled tie order,
   float-time spread chords). Modes `core rt la tp` plus option variants `rt_tol30 la_tol30 rt_key3
   rt_keym5 la_keym5 core_g0_r0 core_dap2 tp_honor tp_bwoff_m2 tp_nocentre tp_tol30 tp_aug6off tp_ltoff
-  tp_meetoff tp_kdgoff tp_chord3 tp_runoff tp_trioff tp_sideoff tp_retoff tp_triadoff tp_sfoff tp_sigm6
+  tp_meetoff tp_kdgoff tp_chord3 tp_runoff tp_trioff tp_sideoff tp_retoff tp_triadoff tp_sfoff tp_rroff tp_sigm6
   tp_sigvar tp_sigoff`, and engine-option variants the Speller does not expose (`rt_twinoff`
   frame_twin off, `rt_mltoff` minor_leading_tone off, `la_pvoff` aug6_passing_voice off).
 - **fixtures**: the lab's 60 fixtures (`~/JavaScript/enharmonic-lab/fixtures/*/events.json`), 322,426

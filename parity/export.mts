@@ -100,6 +100,7 @@ const EXTRA: Record<string, (ev: Ev[]) => Lof[]> = {
     tp_retoff: ev => spellTwoPass(fixturesM.onNotes(ev), { keyReturn: false }).map(toLof),
     tp_triadoff: ev => spellTwoPass(fixturesM.onNotes(ev), { struckTriadThird: false }).map(toLof),
     tp_sfoff: ev => spellTwoPass(fixturesM.onNotes(ev), { shortFlip: false }).map(toLof),
+    tp_rroff: ev => spellTwoPass(fixturesM.onNotes(ev), { runRepair: false }).map(toLof),
     tp_sigm6: ev => { const on = fixturesM.onNotes(ev); return spellTwoPass(on, { keySignatures: on.map(() => -6) }).map(toLof); },
     tp_sigvar: ev => { const on = fixturesM.onNotes(ev); return spellTwoPass(on, { keySignatures: on.map((_: unknown, i: number) => synthSig(i)) }).map(toLof); },
     tp_sigoff: ev => { const on = fixturesM.onNotes(ev); return spellTwoPass(on, { keySignatures: on.map(() => -6), keySignatureAnchor: false }).map(toLof); },

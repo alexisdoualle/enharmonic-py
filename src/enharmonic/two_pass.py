@@ -107,6 +107,17 @@ class TwoPassOptions:
     #: them less than the merge does. Counter-case: a composer's own short respell is undone too (Chopin Barcarolle
     #: m23-24).
     short_flip: bool = True
+    #: A HAMMERED NOTE KEEPS ITS NAME WHEN THE HARMONY GIVES NO REASON TO CHANGE IT. After the merge, a repeated run
+    #: (three or more onsets striking one MIDI pitch, consecutive strikes at most 4 onsets apart) whose strikes carry
+    #: two names gives a block of minority strikes the run's majority name, if (a) one name holds a strict majority,
+    #: (b) no other pitch class carries two names inside the run's span, and (c) the harmony did not change under the
+    #: block: every pitch class SOUNDING (struck, or still held) from the block's first strike to the next run strike
+    #: also sounds in the neighbouring majority strikes' spans. Only the run's own strikes change. A respell in time
+    #: costs a diminished second in every voice that carries the note across, so with no new harmony to pay for it
+    #: the name stays: a hammered Eb over a held chord does not turn D# for two strikes. A composer's respell over a
+    #: moving chord is kept (Liszt, Bruckner, Shostakovich Op. 110 m59); the known miss is a pivot over an unchanged
+    #: chord (Beethoven Op. 7/ii m50).
+    run_repair: bool = True
 
 
 @dataclass(frozen=True)
@@ -363,6 +374,114 @@ def _run_pairs(N: Sequence[TwoPassNote]) -> list[tuple[int, int]]:
             pairs.extend(zip(cur, cur[1:]))
     pairs.sort()
     return pairs
+
+
+def _run_repair(N: Sequence[TwoPassNote], out: list[Optional[int]]) -> None:
+    """``run_repair`` (see :class:`TwoPassOptions`): rename flickering strikes of a repeated run, in place. All
+    judgements read the merged spellings as they stand before any repair."""
+    n = len(N)
+    pcs = [x.midi % 12 for x in N]
+    onset_idx: list[int] = []
+    g = -1
+    last_t = -math.inf
+    for x in N:
+        if x.t_on != last_t:
+            g += 1
+            last_t = x.t_on
+        onset_idx.append(g)
+    by_midi: dict[int, list[int]] = {}
+    for k, x in enumerate(N):
+        by_midi.setdefault(x.midi, []).append(k)
+    fixes: list[tuple[int, int]] = []
+
+    # One run = strikes (each strike = its same-onset unisons) of one MIDI pitch.
+    def judge(run: list[list[int]]) -> None:
+        if len(run) < 3:
+            return
+        pc0 = pcs[run[0][0]]
+        cnt: dict[int, int] = {}
+        for strike in run:
+            for t in strike:
+                v = out[t]
+                if v is not None:
+                    cnt[v] = cnt.get(v, 0) + 1
+        if len(cnt) < 2:
+            return
+        srt = sorted(cnt.items(), key=lambda e: -e[1])
+        if srt[0][1] <= srt[1][1]:  # no strict majority
+            return
+        maj = srt[0][0]
+        # Another pitch class renamed inside the span: the passage moves, the respell is not the run's own.
+        lo, hi = run[0][0], run[-1][-1]
+        names: dict[int, int] = {}
+        for t in range(lo, hi + 1):
+            v = out[t]
+            if pcs[t] == pc0 or v is None:
+                continue
+            w = names.get(pcs[t])
+            if w is None:
+                names[pcs[t]] = v
+            elif w != v:
+                return
+
+        def is_maj(s: int) -> bool:
+            return all(out[t] is None or out[t] == maj for t in run[s])
+
+        def t_start(s: int) -> float:
+            return N[run[s][0]].t_on
+
+        def t_end(s: int) -> float:
+            return t_start(s + 1) if s + 1 < len(run) else max(N[t].t_off for t in run[s])
+
+        # Pitch classes other than the run's sounding in [t0, t1): struck in it, or held into it (128 notes back).
+        def sounding(t0: float, t1: float) -> set[int]:
+            out_set: set[int] = set()
+            k = lo
+            while k > 0 and N[k - 1].t_on >= t0:
+                k -= 1
+            for m in range(max(0, k - 128), k):
+                if N[m].t_off > t0 and pcs[m] != pc0:
+                    out_set.add(pcs[m])
+            while k < n and N[k].t_on < t1:
+                if N[k].t_off > t0 and pcs[k] != pc0:
+                    out_set.add(pcs[k])
+                k += 1
+            return out_set
+
+        s = 0
+        while s < len(run):
+            if is_maj(s):
+                s += 1
+                continue
+            e = s
+            while e + 1 < len(run) and not is_maj(e + 1):
+                e += 1  # minority block [s, e]
+            M = sounding(t_start(s), t_end(e))
+            A: set[int] = set()
+            if s > 0:
+                A |= sounding(t_start(s - 1), t_start(s))
+            if e + 1 < len(run):
+                A |= sounding(t_start(e + 1), t_end(e + 1))
+            if M <= A:
+                for b in range(s, e + 1):
+                    for t in run[b]:
+                        if out[t] is not None and out[t] != maj:
+                            fixes.append((t, maj))
+            s = e + 1
+
+    for ks in by_midi.values():
+        run: list[list[int]] = []
+        for k in ks:
+            if run and N[run[-1][0]].t_on == N[k].t_on:
+                run[-1].append(k)
+                continue
+            if run and onset_idx[k] - onset_idx[run[-1][0]] > 4:
+                judge(run)
+                run = []
+            run.append([k])
+        judge(run)
+    for t, v in fixes:
+        out[t] = v
 
 
 def _order(notes: Sequence[TwoPassNote]) -> list[int]:
@@ -698,6 +817,9 @@ def _two_pass_core(N: Sequence[TwoPassNote], opts: TwoPassOptions, trace_frames:
             if (dirs_x[idx] == 1 and cur is not None and f is not None and f > cur
                     and (v_wolf(f, idx) <= v_wolf(cur, idx) or in_full_dim7(idx))):
                 out[idx] = f
+
+    if opts.run_repair:
+        _run_repair(N, out)
 
     return _CoreResult(out, fwd, bwd, agree_arr, f_frames, b_frames,
                        first_agree if first_agree < n else n, last_agree)
