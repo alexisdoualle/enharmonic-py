@@ -21,7 +21,7 @@ from .pitch import Pitch, PitchClass, midi_of, pitch_at, pitch_class_value, pitc
 from .speller import Speller
 from .two_pass import TwoPassNote, TwoPassOptions, spell_two_pass, spell_two_pass_traced
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "Speller", "CoreSpeller", "spell_two_pass", "spell_two_pass_traced", "TwoPassNote", "TwoPassOptions",
